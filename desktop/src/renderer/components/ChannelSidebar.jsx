@@ -108,9 +108,17 @@ export default function ChannelSidebar() {
                 <button 
                   className="dropdown-item btn-secondary" 
                   style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
+                  onClick={() => { setIsMenuOpen(false); openModal('serverSettings'); }}
+                >
+                  <Settings size={16} style={{ color: 'var(--accent-primary)' }} />
+                  Configurações do Servidor
+                </button>
+                <button 
+                  className="dropdown-item btn-secondary" 
+                  style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
                   onClick={() => { setIsMenuOpen(false); openModal('invite'); }}
                 >
-                  <UserPlus size={16} style={{ color: 'var(--accent-primary)' }} />
+                  <UserPlus size={16} style={{ color: 'var(--accent-success)' }} />
                   Convidar Pessoas
                 </button>
                 <button 
@@ -129,7 +137,7 @@ export default function ChannelSidebar() {
               onClick={() => { setIsMenuOpen(false); openModal('settings'); }}
             >
               <Settings size={16} />
-              Configurações
+              Minhas Configurações
             </button>
           </div>
         )}

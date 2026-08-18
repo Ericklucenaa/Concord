@@ -24,6 +24,7 @@ export function ServerProvider({ children }) {
     invite: false,
     pendingInvites: false,
     settings: false,
+    serverSettings: false,
     channelPermissions: false
   });
 
@@ -239,6 +240,48 @@ export function ServerProvider({ children }) {
       setActiveChannel(newServer.channels[0]);
       setServerMembers(newServer.members);
       return { server: newServer };
+    }
+  };
+
+  const updateServer = async (serverId, serverData) => {
+    try {
+      const data = await api.updateServer(serverId, serverData);
+      await refreshServerDetails(serverId);
+      await refreshServers();
+      return data;
+    } catch (apiErr) {
+      console.warn('Backend API updateServer not reachable, updating local space:', apiErr);
+      setActiveServer((prev) => {
+        if (!prev || prev.id !== serverId) return prev;
+        return {
+          ...prev,
+          name: serverData.name !== undefined ? serverData.name.trim() : prev.name,
+          description: serverData.description !== undefined ? serverData.description : prev.description,
+          icon: serverData.icon !== undefined ? serverData.icon : prev.icon
+        };
+      });
+
+      setServers((prev) => {
+        const next = prev.map((s) => {
+          if (s.id !== serverId) return s;
+          return {
+            ...s,
+            name: serverData.name !== undefined ? serverData.name.trim() : s.name,
+            description: serverData.description !== undefined ? serverData.description : s.description,
+            icon: serverData.icon !== undefined ? serverData.icon : s.icon
+          };
+        });
+        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+
+      return {
+        message: 'Servidor atualizado com sucesso!',
+        server: {
+          id: serverId,
+          ...serverData
+        }
+      };
     }
   };
 
@@ -462,6 +505,7 @@ export function ServerProvider({ children }) {
         refreshServerDetails,
         refreshPendingInvites,
         createServer,
+        updateServer,
         createChannel,
         deleteServer,
         leaveServer,

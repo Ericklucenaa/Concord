@@ -18,6 +18,7 @@ import InviteModal from './components/modals/InviteModal';
 import PendingInvitesModal from './components/modals/PendingInvitesModal';
 import ScreenSharePickerModal from './components/modals/ScreenSharePickerModal';
 import SettingsModal from './components/modals/SettingsModal';
+import ServerSettingsModal from './components/modals/ServerSettingsModal';
 
 import AuthPage from './pages/AuthPage';
 import { CHANNEL_TYPES } from '@shared/constants';
@@ -70,6 +71,7 @@ function MainAppContent() {
       <PendingInvitesModal />
       <ScreenSharePickerModal />
       <SettingsModal />
+      <ServerSettingsModal />
     </div>
   );
 }
