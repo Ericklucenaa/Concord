@@ -330,6 +330,7 @@ export default function ChannelSidebar() {
                       const isMe = u.userId === user?.id;
                       const speaking = isMe ? isSpeaking : u.isSpeaking;
                       const muted = isMe ? isMuted : u.isMuted;
+                      const deafened = isMe ? isDeafened : u.isDeafened;
                       const currentVol = userVolumes?.get(u.userId) !== undefined ? userVolumes.get(u.userId) : 1;
                       const isUserLocallyMuted = currentVol === 0;
 
