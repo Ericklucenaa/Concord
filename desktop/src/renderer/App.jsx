@@ -29,35 +29,45 @@ function MainAppContent() {
   const { activeVoiceChannel } = useVoice();
   const [showMemberList, setShowMemberList] = useState(true);
 
-  // Auto-join server when accessing via Discord-style invite URL
+  // Capture invite code from URL on load (even if unauthenticated)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    const search = window.location.search;
+    let inviteCode = null;
+
+    if (hash && hash.includes('invite=')) {
+      const match = hash.match(/invite=([a-zA-Z0-9]+)/);
+      if (match) inviteCode = match[1];
+    } else if (search && search.includes('invite=')) {
+      const params = new URLSearchParams(search);
+      inviteCode = params.get('invite');
+    }
+
+    if (inviteCode) {
+      sessionStorage.setItem('pending_invite_code', inviteCode.toUpperCase());
+    }
+  }, []);
+
+  // Auto-join server from pending invite code once authenticated
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const checkInviteUrl = async () => {
-      if (typeof window === 'undefined') return;
-      const hash = window.location.hash;
-      const search = window.location.search;
-      let inviteCode = null;
-
-      if (hash && hash.includes('invite=')) {
-        const match = hash.match(/invite=([a-zA-Z0-9]+)/);
-        if (match) inviteCode = match[1];
-      } else if (search && search.includes('invite=')) {
-        const params = new URLSearchParams(search);
-        inviteCode = params.get('invite');
-      }
-
-      if (inviteCode) {
+    const checkPendingInvite = async () => {
+      const pendingCode = sessionStorage.getItem('pending_invite_code');
+      if (pendingCode) {
         try {
-          await joinByCode(inviteCode);
+          await joinByCode(pendingCode);
+          sessionStorage.removeItem('pending_invite_code');
+          // Clear query/hash from browser URL to clean up the navigation history
           window.history.replaceState(null, '', window.location.pathname);
         } catch (err) {
-          console.warn('Auto-join by invite link error:', err);
+          console.warn('Auto-join by stored invite link error:', err);
         }
       }
     };
 
-    checkInviteUrl();
+    checkPendingInvite();
   }, [isAuthenticated, joinByCode]);
 
   if (isLoading) {

@@ -140,6 +140,23 @@ export default function InviteModal() {
                   </button>
                 </div>
 
+                <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                  <a 
+                    href={getInviteLink()} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    style={{ 
+                      color: 'var(--accent-primary)', 
+                      fontSize: 12, 
+                      textDecoration: 'underline', 
+                      wordBreak: 'break-all',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Clique aqui para testar o link de convite diretamente
+                  </a>
+                </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' }}>
                   <span>Código rápido: <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{generatedCode}</strong></span>
                   <button 

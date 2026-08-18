@@ -5,9 +5,10 @@ import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { Hash, Send, Trash2, Smile, Users } from 'lucide-react';
 import { SOCKET_EVENTS, ROLES } from '@shared/constants';
+import { saveMessageToCloud, listenToMessagesFromCloud } from '../services/cloudSync';
 
 export default function ChatArea({ onToggleMemberList }) {
-  const { activeServer, activeChannel } = useServer();
+  const { activeServer, activeChannel, joinByCode } = useServer();
   const { user } = useAuth();
   const { socket } = useSocket();
 
@@ -28,6 +29,8 @@ export default function ChatArea({ onToggleMemberList }) {
     if (!activeChannel?.id) return;
 
     let isMounted = true;
+    let unsubscribeCloud = null;
+
     async function loadMessages() {
       try {
         setIsLoadingMessages(true);
@@ -37,7 +40,15 @@ export default function ChatArea({ onToggleMemberList }) {
           setTimeout(scrollToBottom, 50);
         }
       } catch (err) {
-        console.error('Failed to load channel messages:', err);
+        console.error('Failed to load channel messages via API, subscribing to Firestore:', err);
+        if (isMounted) {
+          unsubscribeCloud = listenToMessagesFromCloud(activeChannel.id, (cloudMsgs) => {
+            if (isMounted) {
+              setMessages(cloudMsgs);
+              setTimeout(scrollToBottom, 50);
+            }
+          });
+        }
       } finally {
         if (isMounted) setIsLoadingMessages(false);
       }
@@ -54,6 +65,9 @@ export default function ChatArea({ onToggleMemberList }) {
       isMounted = false;
       if (socket) {
         socket.emit(SOCKET_EVENTS.CHANNEL_LEAVE, { channelId: activeChannel.id });
+      }
+      if (unsubscribeCloud) {
+        unsubscribeCloud();
       }
     };
   }, [activeChannel?.id, socket]);
@@ -103,18 +117,18 @@ export default function ChatArea({ onToggleMemberList }) {
       });
       socket.emit(SOCKET_EVENTS.TYPING_STOP, { channelId: activeChannel.id });
     } else {
-      // Local message display when in standalone/offline mode
+      // Offline/Firebase Firestore mode
       const localMsg = {
         id: 'msg-' + Date.now(),
         channelId: activeChannel.id,
-        userId: user?.id,
+        userId: user?.id || 'offline-user',
         username: user?.username || 'Você',
         avatar: user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username || 'user'}`,
         content: inputText.trim(),
         createdAt: new Date().toISOString()
       };
-      setMessages((prev) => [...prev, localMsg]);
-      setTimeout(scrollToBottom, 50);
+      // Save message to Firestore (the listener will catch it and display it for all users)
+      saveMessageToCloud(activeChannel.id, localMsg);
     }
 
     setInputText('');
@@ -152,6 +166,98 @@ export default function ChatArea({ onToggleMemberList }) {
   };
 
   const isStaff = activeServer?.role === ROLES.OWNER || activeServer?.role === ROLES.ADMIN || activeServer?.role === ROLES.MODERATOR;
+
+  const renderMessageContent = (msg) => {
+    const text = msg.content || '';
+    // Match Concord invite link/code
+    const inviteRegex = /(?:https?:\/\/[^\s]+)?#invite=([a-zA-Z0-9]+)/i;
+    const match = text.match(inviteRegex);
+
+    if (match) {
+      const inviteCode = match[1];
+      const cleanText = text.replace(inviteRegex, '').trim();
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {cleanText && <div>{cleanText}</div>}
+          <div 
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 16px',
+              marginTop: 6,
+              maxWidth: 480,
+              boxShadow: 'var(--shadow-sm)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div 
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--accent-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 800,
+                  color: '#fff',
+                  fontSize: 16
+                }}
+              >
+                C
+              </div>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                  Você foi convidado para entrar em um servidor
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Código do Convite: {inviteCode}
+                </div>
+              </div>
+            </div>
+            <button 
+              className="btn btn-primary"
+              style={{ padding: '6px 12px', fontSize: 12 }}
+              onClick={async () => {
+                try {
+                  const res = await joinByCode(inviteCode);
+                  alert(res.message || 'Você entrou no servidor com sucesso!');
+                } catch (err) {
+                  alert(err.message || 'Erro ao entrar no servidor.');
+                }
+              }}
+            >
+              Entrar
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    return parts.map((part, index) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a 
+            key={index} 
+            href={part} 
+            target="_blank" 
+            rel="noreferrer" 
+            style={{ color: 'var(--accent-primary)', textDecoration: 'underline' }}
+          >
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  };
 
   const typingArray = Array.from(typingUsers);
   const typingText = typingArray.length > 0 
@@ -217,7 +323,7 @@ export default function ChatArea({ onToggleMemberList }) {
                       </button>
                     )}
                   </div>
-                  <div className="message-text">{msg.content}</div>
+                  <div className="message-text">{renderMessageContent(msg)}</div>
                 </div>
               </div>
             );

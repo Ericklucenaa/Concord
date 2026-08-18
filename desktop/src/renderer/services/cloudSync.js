@@ -12,7 +12,10 @@ import {
   getDocs, 
   updateDoc, 
   arrayUnion, 
-  deleteDoc 
+  deleteDoc,
+  onSnapshot,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 
 /**
@@ -77,6 +80,14 @@ export async function saveServerToCloud(server) {
   if (!server || !server.id) return;
   try {
     const serverRef = doc(firestore, 'concord_servers', String(server.id));
+    let members = server.members || [];
+    if (members.length === 0 && server.ownerId) {
+      members = [{
+        id: String(server.ownerId),
+        role: 'owner',
+        status: 'online'
+      }];
+    }
     await setDoc(serverRef, {
       id: String(server.id),
       name: server.name || 'Servidor Concord',
@@ -84,7 +95,7 @@ export async function saveServerToCloud(server) {
       icon: server.icon || '',
       ownerId: server.ownerId || '',
       channels: server.channels || [],
-      members: server.members || [],
+      members: members,
       inviteCodes: server.inviteCodes || [],
       updatedAt: new Date().toISOString()
     }, { merge: true });
@@ -108,6 +119,7 @@ export async function getServerFromCloud(serverId) {
 }
 
 export async function getUserServersFromCloud(userId, username) {
+  if (!userId) return [];
   const result = [];
   try {
     const q = collection(firestore, 'concord_servers');
@@ -115,10 +127,11 @@ export async function getUserServersFromCloud(userId, username) {
     
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
+      if (!data) return;
       const isMember = (data.members || []).some(
-        (m) => String(m.id) === String(userId) || (username && m.username?.toLowerCase() === username.toLowerCase())
+        (m) => m && m.id && String(m.id) === String(userId)
       );
-      const isOwner = String(data.ownerId) === String(userId);
+      const isOwner = data.ownerId && String(data.ownerId) === String(userId);
       if (isMember || isOwner) {
         result.push(data);
       }
@@ -241,5 +254,100 @@ export async function respondInviteInCloud(inviteId, action, currentUser) {
     }
   } catch (err) {
     console.warn('Cloud respond invite notice:', err);
+  }
+}
+
+export async function saveMessageToCloud(channelId, message) {
+  if (!channelId || !message) return;
+  try {
+    const msgRef = doc(firestore, 'concord_messages', String(message.id));
+    await setDoc(msgRef, {
+      ...message,
+      channelId: String(channelId),
+      createdAt: message.createdAt || new Date().toISOString()
+    });
+  } catch (err) {
+    console.warn('Cloud save message notice:', err);
+  }
+}
+
+export function listenToMessagesFromCloud(channelId, callback) {
+  if (!channelId) return () => {};
+  try {
+    const q = query(
+      collection(firestore, 'concord_messages'),
+      where('channelId', '==', String(channelId)),
+      orderBy('createdAt', 'asc')
+    );
+    return onSnapshot(q, (snapshot) => {
+      const messages = [];
+      snapshot.forEach((docSnap) => {
+        messages.push(docSnap.data());
+      });
+      callback(messages);
+    }, (err) => {
+      console.warn('Cloud listen messages error:', err);
+    });
+  } catch (err) {
+    console.warn('Cloud listen messages init error:', err);
+    return () => {};
+  }
+}
+
+export async function joinVoiceInCloud(channelId, userInfo) {
+  if (!channelId || !userInfo) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    let users = [];
+    if (snap.exists()) {
+      users = snap.data().users || [];
+    }
+    // Filter out existing entries for this user
+    users = users.filter((u) => String(u.userId) !== String(userInfo.userId));
+    users.push(userInfo);
+    await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
+    
+    // Also trigger global event so UI knows
+    window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
+  } catch (err) {
+    console.warn('Cloud join voice notice:', err);
+  }
+}
+
+export async function leaveVoiceInCloud(channelId, userId) {
+  if (!channelId || !userId) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    if (snap.exists()) {
+      let users = snap.data().users || [];
+      users = users.filter((u) => String(u.userId) !== String(userId));
+      if (users.length === 0) {
+        await deleteDoc(roomRef);
+      } else {
+        await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
+      }
+      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
+    }
+  } catch (err) {
+    console.warn('Cloud leave voice notice:', err);
+  }
+}
+
+export function listenToVoiceRoomInCloud(channelId, callback) {
+  if (!channelId) return () => {};
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    return onSnapshot(roomRef, (snap) => {
+      if (snap.exists()) {
+        callback(snap.data().users || []);
+      } else {
+        callback([]);
+      }
+    });
+  } catch (err) {
+    console.warn('Cloud listen voice room error:', err);
+    return () => {};
   }
 }

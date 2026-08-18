@@ -49,7 +49,7 @@ export async function createInvite(req, res) {
     }
 
     const inviteId = randomUUID();
-    const code = generateRandomCode(8);
+    const code = generateRandomCode(8).toUpperCase();
 
     await db.run(
       'INSERT INTO invites (id, server_id, sender_id, receiver_id, code, status) VALUES (?, ?, ?, ?, ?, ?)',
@@ -88,7 +88,7 @@ export async function joinByCode(req, res) {
       return res.status(400).json({ error: 'Código de convite obrigatório.' });
     }
 
-    const cleanCode = code.trim();
+    const cleanCode = code.trim().toUpperCase();
     const invite = await db.get('SELECT * FROM invites WHERE code = ?', [cleanCode]);
 
     if (!invite) {

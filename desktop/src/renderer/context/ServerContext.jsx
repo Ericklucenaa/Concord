@@ -21,6 +21,8 @@ export function ServerProvider({ children }) {
   const { isAuthenticated, user } = useAuth();
   const { socket } = useSocket();
 
+  const getStorageKey = () => user?.id ? `concord_local_servers_${user.id}` : 'concord_local_servers';
+
   const [servers, setServers] = useState([]);
   const [activeServer, setActiveServer] = useState(null);
   const [activeChannel, setActiveChannel] = useState(null);
@@ -62,7 +64,7 @@ export function ServerProvider({ children }) {
       let combinedServers = [];
       try {
         const cloudServers = await getUserServersFromCloud(user?.id, user?.username);
-        const storedLocal = JSON.parse(localStorage.getItem('concord_local_servers') || '[]');
+        const storedLocal = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
         
         const serverMap = new Map();
         cloudServers.forEach((s) => serverMap.set(String(s.id), s));
@@ -103,7 +105,7 @@ export function ServerProvider({ children }) {
 
         saveServerToCloud(initialServer);
         combinedServers = [initialServer];
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(combinedServers)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(combinedServers)); } catch (e) {}
       }
 
       setServers(combinedServers);
@@ -324,7 +326,7 @@ export function ServerProvider({ children }) {
 
       setServers((prev) => {
         const next = [...prev, newServer];
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -367,7 +369,7 @@ export function ServerProvider({ children }) {
             icon: serverData.icon !== undefined ? serverData.icon : s.icon
           };
         });
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -409,7 +411,7 @@ export function ServerProvider({ children }) {
 
       setServers((prev) => {
         const next = prev.map((s) => s.id === serverId ? { ...s, channels: [...(s.channels || []), newCh] } : s);
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -425,7 +427,7 @@ export function ServerProvider({ children }) {
       console.warn('Backend API deleteServer not reachable, removing space:', apiErr);
       setServers((prev) => {
         const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
         return next;
       });
       setActiveServer(null);
@@ -441,7 +443,7 @@ export function ServerProvider({ children }) {
       console.warn('Backend API leaveServer not reachable, removing space:', apiErr);
       setServers((prev) => {
         const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
         return next;
       });
       setActiveServer(null);
@@ -541,7 +543,7 @@ export function ServerProvider({ children }) {
         setServers((prev) => {
           const filtered = prev.filter((s) => s.id !== joinedServer.id);
           const next = [...filtered, joinedServer];
-          try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+          try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
           return next;
         });
 
@@ -558,7 +560,7 @@ export function ServerProvider({ children }) {
       }
 
       // Check local storage for invite code
-      const localServers = JSON.parse(localStorage.getItem('concord_local_servers') || '[]');
+      const localServers = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
       const matching = localServers.find((s) => s.inviteCodes?.includes(cleanCode) || s.id === cleanCode);
       
       if (matching) {
@@ -602,7 +604,7 @@ export function ServerProvider({ children }) {
             setServers((prev) => {
               const filtered = prev.filter((s) => s.id !== joinedServer.id);
               const next = [...filtered, joinedServer];
-              try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+              try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
               return next;
             });
             setActiveServer(joinedServer);
