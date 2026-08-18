@@ -1,0 +1,34 @@
+{
+  "name": "concord",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Desktop communication application with WebRTC Voice and Screen Sharing",
+  "main": "desktop/src/main/index.js",
+  "scripts": {
+    "postinstall": "npm run install:all",
+    "install:all": "npm install --prefix backend && npm install --prefix desktop",
+    "start": "node dev.js",
+    "dev": "node dev.js",
+    "dev:web": "concurrently \"npm start --prefix backend\" \"npm run dev:renderer --prefix desktop\"",
+    "start:backend": "npm start --prefix backend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:desktop": "npm run dev --prefix desktop",
+    "test:backend": "npm test --prefix backend",
+    "test": "npm run test:backend",
+    "build:desktop": "npm run build --prefix desktop",
+    "package:win": "npm run package:win --prefix desktop"
+  },
+  "keywords": [
+    "chat",
+    "webrtc",
+    "voice",
+    "screenshare",
+    "electron",
+    "desktop"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
