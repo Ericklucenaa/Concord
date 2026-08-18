@@ -7,6 +7,7 @@ import {
   signUpWithEmail, 
   signOutFirebase 
 } from '../services/firebase';
+import { syncUserToCloud } from '../services/cloudSync';
 
 const AuthContext = createContext(null);
 
@@ -73,6 +74,12 @@ export function AuthProvider({ children }) {
 
     loadUser();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      syncUserToCloud(user);
+    }
+  }, [user]);
 
   const login = async (credentials) => {
     try {

@@ -12,6 +12,21 @@ import {
   signOut
 } from 'firebase/auth';
 
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  onSnapshot, 
+  updateDoc, 
+  arrayUnion, 
+  deleteDoc 
+} from 'firebase/firestore';
+
 const firebaseConfig = {
   apiKey: "AIzaSyCHJQ3k7Xnc0bbs2n6YzCdIe6gfHmSDSjo",
   authDomain: "concord-3af70.firebaseapp.com",
@@ -23,6 +38,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+export const firestore = getFirestore(app);
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({
