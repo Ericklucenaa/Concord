@@ -496,6 +496,7 @@ export function VoiceProvider({ children }) {
         toggleMute,
         toggleDeafen,
         setUserVolume,
+        userVolumes,
         inputDevices,
         outputDevices,
         selectedInputDevice,

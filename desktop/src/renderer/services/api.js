@@ -57,7 +57,7 @@ class ApiService {
         if (!response.ok) {
           throw new Error(text || `Erro no servidor (${response.status} ${response.statusText}).`);
         }
-        throw new Error('Servidor retornou resposta não-JSON. Verifique se o backend está ativo na porta 4000.');
+        throw new Error('Backend indisponível (modo offline).');
       }
 
       if (!response.ok) {

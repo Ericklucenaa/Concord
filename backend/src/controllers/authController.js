@@ -157,7 +157,7 @@ export async function getMe(req, res) {
 
 export async function updateProfile(req, res) {
   try {
-    const { avatar, status, currentPassword, newPassword } = req.body;
+    const { username, avatar, status, currentPassword, newPassword } = req.body;
     const userId = req.user.id;
 
     const user = await db.get('SELECT * FROM users WHERE id = ?', [userId]);
@@ -165,8 +165,29 @@ export async function updateProfile(req, res) {
       return res.status(404).json({ error: 'Usuário não encontrado.' });
     }
 
+    let updatedUsername = user.username;
     let updatedAvatar = user.avatar;
     let updatedStatus = user.status;
+
+    if (username !== undefined && username.trim()) {
+      const cleanUsername = username.trim().replace(/^@/, '');
+      if (cleanUsername.length < 3 || cleanUsername.length > 24) {
+        return res.status(400).json({ error: 'O apelido deve ter entre 3 e 24 caracteres.' });
+      }
+      if (!/^[a-zA-Z0-9_]+$/.test(cleanUsername)) {
+        return res.status(400).json({ error: 'O apelido deve conter apenas letras, números e underline (_).' });
+      }
+
+      // Check if unique
+      const duplicate = await db.get(
+        'SELECT id FROM users WHERE username = ? COLLATE NOCASE AND id != ?',
+        [cleanUsername, userId]
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: 'Este apelido já está em uso por outro usuário.' });
+      }
+      updatedUsername = cleanUsername;
+    }
 
     if (avatar !== undefined) {
       updatedAvatar = avatar;
@@ -194,13 +215,13 @@ export async function updateProfile(req, res) {
       const newHash = await bcrypt.hash(newPassword, salt);
 
       await db.run(
-        'UPDATE users SET avatar = ?, status = ?, password_hash = ? WHERE id = ?',
-        [updatedAvatar, updatedStatus, newHash, userId]
+        'UPDATE users SET username = ?, avatar = ?, status = ?, password_hash = ? WHERE id = ?',
+        [updatedUsername, updatedAvatar, updatedStatus, newHash, userId]
       );
     } else {
       await db.run(
-        'UPDATE users SET avatar = ?, status = ? WHERE id = ?',
-        [updatedAvatar, updatedStatus, userId]
+        'UPDATE users SET username = ?, avatar = ?, status = ? WHERE id = ?',
+        [updatedUsername, updatedAvatar, updatedStatus, userId]
       );
     }
 
@@ -208,7 +229,7 @@ export async function updateProfile(req, res) {
       message: 'Perfil atualizado com sucesso!',
       user: {
         id: user.id,
-        username: user.username,
+        username: updatedUsername,
         email: user.email,
         avatar: updatedAvatar,
         status: updatedStatus,

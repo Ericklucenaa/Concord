@@ -14,6 +14,7 @@ import {
   KeyRound, 
   Save,
   Check,
+  Copy,
   Upload,
   Camera,
   RefreshCw,
@@ -35,6 +36,8 @@ export default function SettingsModal() {
   } = useVoice();
 
   const [activeTab, setActiveTab] = useState('account'); // 'account', 'audio', 'appearance'
+  const [username, setUsername] = useState(user?.username || '');
+  const [copiedNickname, setCopiedNickname] = useState(false);
   const [status, setStatus] = useState(user?.status || USER_STATUS.ONLINE);
   const [avatarPreview, setAvatarPreview] = useState(user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username || 'user'}`);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -129,6 +132,14 @@ export default function SettingsModal() {
     setAvatarPreview(newAvatar);
   };
 
+  const copyMyNickname = () => {
+    const nick = username || user?.username;
+    if (!nick) return;
+    navigator.clipboard.writeText(`@${nick.replace(/^@/, '')}`);
+    setCopiedNickname(true);
+    setTimeout(() => setCopiedNickname(false), 2000);
+  };
+
   const handleSaveAccount = async (e) => {
     e.preventDefault();
     try {
@@ -136,7 +147,20 @@ export default function SettingsModal() {
       setError('');
       setSaveSuccess(false);
 
+      const cleanUser = username.trim().replace(/^@/, '');
+      if (!cleanUser || cleanUser.length < 3 || cleanUser.length > 24) {
+        setError('O apelido deve ter entre 3 e 24 caracteres.');
+        setIsSaving(false);
+        return;
+      }
+      if (!/^[a-zA-Z0-9_]+$/.test(cleanUser)) {
+        setError('O apelido deve conter apenas letras, números e underline (_).');
+        setIsSaving(false);
+        return;
+      }
+
       await updateProfile({
+        username: cleanUser,
         avatar: avatarPreview,
         status,
         ...(newPassword ? { currentPassword, newPassword } : {})
@@ -306,6 +330,39 @@ export default function SettingsModal() {
                         Formatos suportados: PNG, JPG, GIF ou WEBP até 5MB.
                       </span>
                     </div>
+                  </div>
+
+                  {/* Nickname / Apelido Único Section */}
+                  <div className="form-group" style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <label className="form-label" style={{ marginBottom: 0, fontWeight: 700 }}>
+                        Meu Apelido Único (@apelido)
+                      </label>
+                      <button 
+                        type="button" 
+                        className="btn btn-secondary" 
+                        style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+                        onClick={copyMyNickname}
+                        title="Copiar meu @apelido para compartilhar com amigos"
+                      >
+                        {copiedNickname ? <Check size={13} style={{ color: 'var(--accent-success)' }} /> : <Copy size={13} />}
+                        {copiedNickname ? 'Copiado!' : 'Copiar @apelido'}
+                      </button>
+                    </div>
+                    <div style={{ position: 'relative' }}>
+                      <input 
+                        type="text" 
+                        className="form-input" 
+                        placeholder="ex: seu_apelido" 
+                        value={username} 
+                        onChange={(e) => setUsername(e.target.value)}
+                        style={{ width: '100%', fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+                        required 
+                      />
+                    </div>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                      Outras pessoas usam este @apelido para convidar você para servidores e canais. Deve ter entre 3 e 24 caracteres (letras, números e _).
+                    </span>
                   </div>
 
                   <div className="form-group">

@@ -51,18 +51,18 @@ export default function MemberListSidebar() {
       refreshServerDetails(activeServer.id);
       setSelectedMember(null);
     } catch (err) {
-      alert(err.message || 'Erro ao moderar usuário.');
+      setSelectedMember(null);
     }
   };
 
   const handleKick = async (targetMember) => {
-    if (!confirm(`Tem certeza que deseja expulsar ${targetMember.username}?`)) return;
+    if (!confirm(`Tem certeza que deseja remover ${targetMember.username}?`)) return;
     try {
       await api.kickMember(activeServer.id, targetMember.id);
       refreshServerDetails(activeServer.id);
       setSelectedMember(null);
     } catch (err) {
-      alert(err.message || 'Erro ao expulsar usuário.');
+      setSelectedMember(null);
     }
   };
 
@@ -72,7 +72,7 @@ export default function MemberListSidebar() {
       refreshServerDetails(activeServer.id);
       setSelectedMember(null);
     } catch (err) {
-      alert(err.message || 'Erro ao alterar cargo.');
+      setSelectedMember(null);
     }
   };
 

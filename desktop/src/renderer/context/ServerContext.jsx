@@ -131,9 +131,21 @@ export function ServerProvider({ children }) {
       const data = await api.getPendingInvites();
       setPendingInvites(data.invites || []);
     } catch (err) {
-      console.error('Failed to load pending invites:', err);
+      // Local storage fallback for invites sent by nickname
+      try {
+        const myNick = (user?.username || '').toLowerCase().replace(/^@/, '');
+        const stored = localStorage.getItem(`concord_invites_${myNick}`);
+        if (stored) {
+          const list = JSON.parse(stored);
+          setPendingInvites(Array.isArray(list) ? list : []);
+        } else {
+          setPendingInvites([]);
+        }
+      } catch (e) {
+        setPendingInvites([]);
+      }
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.username]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -305,14 +317,32 @@ export function ServerProvider({ children }) {
     } catch (apiErr) {
       console.warn('Backend API createInvite not reachable, generating code:', apiErr);
       const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const targetServer = servers.find((s) => s.id === serverId) || activeServer;
+      
+      const newInvite = {
+        id: 'inv-' + Date.now(),
+        serverId,
+        serverName: targetServer?.name || 'Servidor Concord',
+        serverIcon: targetServer?.icon,
+        senderUsername: user?.username || 'admin',
+        code,
+        status: 'pending'
+      };
+
+      if (inviteData?.username) {
+        const targetNick = inviteData.username.trim().toLowerCase().replace(/^@/, '');
+        try {
+          const key = `concord_invites_${targetNick}`;
+          const current = JSON.parse(localStorage.getItem(key) || '[]');
+          current.push(newInvite);
+          localStorage.setItem(key, JSON.stringify(current));
+        } catch (e) {}
+      }
+
       return {
-        message: inviteData.username ? `Convite enviado para @${inviteData.username}!` : 'Código de convite gerado!',
-        invite: {
-          id: 'inv-' + Date.now(),
-          serverId,
-          code,
-          status: 'pending'
-        }
+        message: inviteData.username ? `Convite enviado com sucesso para @${inviteData.username.replace(/^@/, '')}!` : 'Código de convite gerado!',
+        invite: newInvite,
+        code
       };
     }
   };
@@ -364,8 +394,56 @@ export function ServerProvider({ children }) {
       return data;
     } catch (apiErr) {
       console.warn('Backend API respondInvite not reachable:', apiErr);
+      const inviteToProcess = pendingInvites.find((i) => i.id === inviteId);
+      
+      // Remove from user's pending invites list in localStorage
+      try {
+        const myNick = (user?.username || '').toLowerCase().replace(/^@/, '');
+        const key = `concord_invites_${myNick}`;
+        const current = JSON.parse(localStorage.getItem(key) || '[]');
+        const filtered = current.filter((i) => i.id !== inviteId);
+        localStorage.setItem(key, JSON.stringify(filtered));
+      } catch (e) {}
+
       setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId));
-      return { message: action === 'accept' ? 'Convite aceito!' : 'Convite recusado.' };
+
+      if (action === 'accept' && inviteToProcess) {
+        const found = servers.find((s) => s.id === inviteToProcess.serverId);
+        if (found) {
+          setActiveServer(found);
+          if (found.channels?.length > 0) setActiveChannel(found.channels[0]);
+        } else {
+          const joined = {
+            id: inviteToProcess.serverId,
+            name: inviteToProcess.serverName || 'Servidor Concord',
+            description: 'Servidor adicionado via convite',
+            icon: inviteToProcess.serverIcon || `https://api.dicebear.com/7.x/identicon/svg?seed=${inviteToProcess.serverId}`,
+            ownerId: 'server-owner',
+            role: 'member',
+            channels: [
+              { id: 'ch-' + Date.now() + '-1', serverId: inviteToProcess.serverId, name: 'geral', type: 'text', isPrivate: false },
+              { id: 'ch-' + Date.now() + '-2', serverId: inviteToProcess.serverId, name: 'Sala Geral', type: 'voice', isPrivate: false }
+            ],
+            members: user ? [{
+              id: user.id,
+              username: user.username,
+              avatar: user.avatar,
+              status: 'online',
+              role: 'member'
+            }] : []
+          };
+
+          setServers((prev) => {
+            const next = [...prev, joined];
+            try { localStorage.setItem('concord_local_servers', JSON.stringify(next)); } catch (e) {}
+            return next;
+          });
+          setActiveServer(joined);
+          setActiveChannel(joined.channels[0]);
+        }
+      }
+
+      return { message: action === 'accept' ? 'Convite aceito! Você entrou no servidor.' : 'Convite recusado.' };
     }
   };
 

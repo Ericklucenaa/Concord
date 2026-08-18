@@ -39,7 +39,8 @@ export default function InviteModal() {
       setIsLoading(true);
       setError('');
       const data = await createInvite(activeServer.id, {});
-      setGeneratedCode(data.invite.code);
+      const code = data?.invite?.code || data?.code || '';
+      setGeneratedCode(code);
     } catch (err) {
       setError(err.message || 'Erro ao gerar código de convite.');
     } finally {

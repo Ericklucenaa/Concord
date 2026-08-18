@@ -6,6 +6,7 @@ import { useScreenShare } from '../context/ScreenShareContext';
 import { 
   Hash, 
   Volume2, 
+  VolumeX,
   Plus, 
   ChevronDown, 
   UserPlus, 
@@ -17,7 +18,8 @@ import {
   Tv, 
   PhoneOff,
   Radio,
-  Sliders
+  Sliders,
+  X
 } from 'lucide-react';
 import { CHANNEL_TYPES, ROLES, USER_STATUS } from '@shared/constants';
 
@@ -39,7 +41,9 @@ export default function ChannelSidebar() {
     isDeafened, 
     isSpeaking,
     toggleMute, 
-    toggleDeafen 
+    toggleDeafen,
+    userVolumes,
+    setUserVolume
   } = useVoice();
   const { 
     isScreenSharing, 
@@ -49,6 +53,7 @@ export default function ChannelSidebar() {
   } = useScreenShare();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [selectedVoiceUser, setSelectedVoiceUser] = useState(null);
 
   if (!activeServer) {
     return (
@@ -227,21 +232,29 @@ export default function ChannelSidebar() {
                       const isMe = u.userId === user?.id;
                       const speaking = isMe ? isSpeaking : u.isSpeaking;
                       const muted = isMe ? isMuted : u.isMuted;
-                      const deafened = isMe ? isDeafened : u.isDeafened;
+                      const currentVol = userVolumes?.get(u.userId) !== undefined ? userVolumes.get(u.userId) : 1;
+                      const isUserLocallyMuted = currentVol === 0;
 
                       return (
                         <div 
                           key={u.userId} 
                           className={`voice-user-pill ${speaking ? 'speaking' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : u);
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
-                            padding: '4px 8px',
+                            padding: '5px 8px',
                             borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'rgba(0, 0, 0, 0.2)',
-                            margin: '1px 0'
+                            backgroundColor: selectedVoiceUser?.userId === u.userId ? 'var(--bg-active)' : 'rgba(0, 0, 0, 0.2)',
+                            margin: '2px 0',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease'
                           }}
+                          title={`Clique para opções de áudio e perfil de @${u.username}`}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
                             <div style={{ position: 'relative', width: 22, height: 22, flexShrink: 0 }}>
@@ -272,6 +285,9 @@ export default function ChannelSidebar() {
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                            {isUserLocallyMuted && !isMe && (
+                              <VolumeX size={12} style={{ color: 'var(--accent-danger)' }} title="Silenciado localmente" />
+                            )}
                             {u.isScreenSharing && (
                               <span style={{ fontSize: 9, backgroundColor: 'var(--accent-danger)', padding: '1px 4px', borderRadius: 3, color: '#fff', fontWeight: 800 }}>LIVE</span>
                             )}
@@ -315,6 +331,86 @@ export default function ChannelSidebar() {
             );
           })}
         </div>
+
+        {/* Discord-style Voice User Controls Modal/Popover */}
+        {selectedVoiceUser && (
+          <div 
+            style={{
+              margin: '8px 10px',
+              padding: 12,
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-color)',
+              boxShadow: 'var(--shadow-lg)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <img 
+                  src={selectedVoiceUser.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${selectedVoiceUser.username}`} 
+                  alt="" 
+                  style={{ width: 28, height: 28, borderRadius: 'var(--radius-full)', objectFit: 'cover', border: '1px solid var(--border-color)' }}
+                />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{selectedVoiceUser.username}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>@{selectedVoiceUser.username}</div>
+                </div>
+              </div>
+              <button className="icon-btn" onClick={() => setSelectedVoiceUser(null)}>
+                <X size={14} />
+              </button>
+            </div>
+
+            {selectedVoiceUser.userId !== user?.id ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Volume do Usuário</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                      {Math.round(((userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1) * 100))}%
+                    </span>
+                  </div>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="2" 
+                    step="0.05"
+                    value={userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1}
+                    onChange={(e) => setUserVolume(selectedVoiceUser.userId, parseFloat(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button 
+                    className="btn btn-secondary"
+                    style={{ flex: 1, padding: '6px 8px', fontSize: 12, justifyContent: 'center' }}
+                    onClick={() => {
+                      const cur = userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1;
+                      setUserVolume(selectedVoiceUser.userId, cur === 0 ? 1 : 0);
+                    }}
+                  >
+                    {(userVolumes?.get(selectedVoiceUser.userId) === 0) ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                    {(userVolumes?.get(selectedVoiceUser.userId) === 0) ? 'Desmutar' : 'Mutar Local'}
+                  </button>
+
+                  <button 
+                    className="btn btn-secondary"
+                    style={{ padding: '6px 8px', fontSize: 12 }}
+                    onClick={() => setUserVolume(selectedVoiceUser.userId, 1)}
+                    title="Redefinir volume para 100%"
+                  >
+                    100%
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
+                Este é o seu perfil de voz ativo.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Active Voice Connection Bar */}

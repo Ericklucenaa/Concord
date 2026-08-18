@@ -205,8 +205,10 @@ export function AuthProvider({ children }) {
       return data;
     } catch (apiErr) {
       console.warn('Backend API updateProfile not reachable, updating local profile:', apiErr);
+      const cleanUsername = profileData.username ? profileData.username.trim().replace(/^@/, '') : user?.username;
       const updatedUser = {
         ...user,
+        username: cleanUsername || user?.username,
         avatar: profileData.avatar !== undefined ? profileData.avatar : user?.avatar,
         status: profileData.status !== undefined ? profileData.status : user?.status
       };
