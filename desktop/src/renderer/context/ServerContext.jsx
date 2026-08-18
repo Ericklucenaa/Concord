@@ -152,6 +152,17 @@ export function ServerProvider({ children }) {
     if (isAuthenticated) {
       refreshServers();
       refreshPendingInvites();
+
+      const handleIncomingInvite = () => {
+        refreshPendingInvites();
+      };
+
+      window.addEventListener('storage', handleIncomingInvite);
+      window.addEventListener('concord:invite_created', handleIncomingInvite);
+      return () => {
+        window.removeEventListener('storage', handleIncomingInvite);
+        window.removeEventListener('concord:invite_created', handleIncomingInvite);
+      };
     } else {
       setServers([]);
       setActiveServer(null);
@@ -369,21 +380,25 @@ export function ServerProvider({ children }) {
         serverIcon: targetServer?.icon,
         senderUsername: user?.username || 'admin',
         code,
-        status: 'pending'
+        status: 'pending',
+        createdAt: new Date().toISOString()
       };
 
       if (inviteData?.username) {
         const targetNick = inviteData.username.trim().toLowerCase().replace(/^@/, '');
-        try {
-          const key = `concord_invites_${targetNick}`;
-          const current = JSON.parse(localStorage.getItem(key) || '[]');
-          current.push(newInvite);
-          localStorage.setItem(key, JSON.stringify(current));
-        } catch (e) {}
+        if (targetNick) {
+          try {
+            const key = `concord_invites_${targetNick}`;
+            const current = JSON.parse(localStorage.getItem(key) || '[]');
+            current.push(newInvite);
+            localStorage.setItem(key, JSON.stringify(current));
+            window.dispatchEvent(new Event('concord:invite_created'));
+          } catch (e) {}
+        }
       }
 
       return {
-        message: inviteData.username ? `Convite enviado com sucesso para @${inviteData.username.replace(/^@/, '')}!` : 'Código de convite gerado!',
+        message: inviteData.username ? `Convite enviado com sucesso para a caixa de mensagens de @${inviteData.username.replace(/^@/, '')}!` : 'Código de convite gerado com sucesso!',
         invite: newInvite,
         code
       };

@@ -25,9 +25,17 @@ export async function createInvite(req, res) {
     let receiverUser = null;
     if (username) {
       const cleanUsername = username.replace(/^@/, '').trim();
+      if (!cleanUsername) {
+        return res.status(400).json({ error: 'Informe o apelido do usuário para convidar.' });
+      }
+
       receiverUser = await db.get('SELECT id, username, email FROM users WHERE username = ? COLLATE NOCASE', [cleanUsername]);
       if (!receiverUser) {
-        return res.status(404).json({ error: `Usuário @${cleanUsername} não foi encontrado.` });
+        return res.status(404).json({ error: `O apelido @${cleanUsername} não existe. Verifique se digitou corretamente.` });
+      }
+
+      if (receiverUser.id === senderId) {
+        return res.status(400).json({ error: 'Você não pode enviar um convite para o seu próprio apelido.' });
       }
 
       // Check if user is already in the server

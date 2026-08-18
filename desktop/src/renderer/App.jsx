@@ -25,9 +25,40 @@ import { CHANNEL_TYPES } from '@shared/constants';
 
 function MainAppContent() {
   const { isAuthenticated, isLoading } = useAuth();
-  const { activeChannel } = useServer();
+  const { activeChannel, joinByCode } = useServer();
   const { activeVoiceChannel } = useVoice();
   const [showMemberList, setShowMemberList] = useState(true);
+
+  // Auto-join server when accessing via Discord-style invite URL
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const checkInviteUrl = async () => {
+      if (typeof window === 'undefined') return;
+      const hash = window.location.hash;
+      const search = window.location.search;
+      let inviteCode = null;
+
+      if (hash && hash.includes('invite=')) {
+        const match = hash.match(/invite=([a-zA-Z0-9]+)/);
+        if (match) inviteCode = match[1];
+      } else if (search && search.includes('invite=')) {
+        const params = new URLSearchParams(search);
+        inviteCode = params.get('invite');
+      }
+
+      if (inviteCode) {
+        try {
+          await joinByCode(inviteCode);
+          window.history.replaceState(null, '', window.location.pathname);
+        } catch (err) {
+          console.warn('Auto-join by invite link error:', err);
+        }
+      }
+    };
+
+    checkInviteUrl();
+  }, [isAuthenticated, joinByCode]);
 
   if (isLoading) {
     return (
