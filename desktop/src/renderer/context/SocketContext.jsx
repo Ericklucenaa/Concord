@@ -10,13 +10,12 @@ function getSocketUrl() {
     return import.meta.env.VITE_SOCKET_URL;
   }
   if (typeof window !== 'undefined') {
-    const { hostname, protocol } = window.location;
+    const { hostname } = window.location;
     if (hostname === 'localhost' || hostname === '127.0.0.1' || !hostname) {
       return 'http://localhost:4000';
     }
-    if (protocol === 'http:' || protocol === 'https:') {
-      return `${protocol}//${hostname}:4000`;
-    }
+    // In web hosting without explicit backend URL, disable socket connection attempts
+    return null;
   }
   return 'http://localhost:4000';
 }
@@ -30,7 +29,7 @@ export function SocketProvider({ children }) {
   const [userStatuses, setUserStatuses] = useState(new Map());
 
   useEffect(() => {
-    if (!token || !user) {
+    if (!token || !user || !SOCKET_URL) {
       if (socket) {
         socket.disconnect();
         setSocket(null);

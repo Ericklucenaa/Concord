@@ -199,9 +199,20 @@ export function AuthProvider({ children }) {
   };
 
   const updateProfile = async (profileData) => {
-    const data = await api.updateProfile(profileData);
-    setUser(data.user);
-    return data;
+    try {
+      const data = await api.updateProfile(profileData);
+      if (data?.user) setUser(data.user);
+      return data;
+    } catch (apiErr) {
+      console.warn('Backend API updateProfile not reachable, updating local profile:', apiErr);
+      const updatedUser = {
+        ...user,
+        avatar: profileData.avatar !== undefined ? profileData.avatar : user?.avatar,
+        status: profileData.status !== undefined ? profileData.status : user?.status
+      };
+      setUser(updatedUser);
+      return { user: updatedUser };
+    }
   };
 
   return (

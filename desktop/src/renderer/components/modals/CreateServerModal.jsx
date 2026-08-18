@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { api } from '../../services/api';
 import { X, Sparkles, LogIn } from 'lucide-react';
 
 export default function CreateServerModal() {
-  const { modalState, closeModal, refreshServers, setActiveServer } = useServer();
+  const { modalState, closeModal, createServer, joinByCode } = useServer();
   const [tab, setTab] = useState('create'); // 'create' or 'join'
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -21,13 +20,11 @@ export default function CreateServerModal() {
     try {
       setIsLoading(true);
       setError('');
-      const data = await api.createServer({
+      await createServer({
         name: name.trim(),
         description: description.trim()
       });
 
-      await refreshServers();
-      setActiveServer(data.server);
       closeModal('createServer');
       setName('');
       setDescription('');
@@ -45,8 +42,7 @@ export default function CreateServerModal() {
     try {
       setIsLoading(true);
       setError('');
-      const data = await api.joinByCode(inviteCode.trim());
-      await refreshServers();
+      await joinByCode(inviteCode.trim());
       closeModal('createServer');
       setInviteCode('');
     } catch (err) {

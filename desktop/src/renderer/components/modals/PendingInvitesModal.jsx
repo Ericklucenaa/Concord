@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { api } from '../../services/api';
 import { X, Check, Trash2, Mail, Users } from 'lucide-react';
 
 export default function PendingInvitesModal() {
@@ -8,9 +7,7 @@ export default function PendingInvitesModal() {
     modalState, 
     closeModal, 
     pendingInvites, 
-    refreshPendingInvites, 
-    refreshServers,
-    setActiveServer 
+    respondInvite
   } = useServer();
   const [processingId, setProcessingId] = useState(null);
 
@@ -19,18 +16,8 @@ export default function PendingInvitesModal() {
   const handleRespond = async (inviteId, action) => {
     try {
       setProcessingId(inviteId);
-      const data = await api.respondInvite(inviteId, action);
-
-      await refreshPendingInvites();
-      await refreshServers();
-
-      if (action === 'accept' && data.serverId) {
-        const serverData = await api.getServer(data.serverId);
-        if (serverData.server) {
-          setActiveServer(serverData.server);
-        }
-        closeModal('pendingInvites');
-      }
+      await respondInvite(inviteId, action);
+      closeModal('pendingInvites');
     } catch (err) {
       alert(err.message || 'Erro ao processar convite.');
     } finally {

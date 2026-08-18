@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { api } from '../../services/api';
 import { X, Hash, Volume2 } from 'lucide-react';
 import { CHANNEL_TYPES } from '@shared/constants';
 
 export default function CreateChannelModal() {
-  const { activeServer, modalState, closeModal, refreshServerDetails, setActiveChannel } = useServer();
+  const { activeServer, modalState, closeModal, createChannel, setActiveChannel } = useServer();
   const [name, setName] = useState('');
   const [type, setType] = useState(CHANNEL_TYPES.TEXT);
   const [isPrivate, setIsPrivate] = useState(false);
@@ -21,14 +20,13 @@ export default function CreateChannelModal() {
     try {
       setIsLoading(true);
       setError('');
-      const data = await api.createChannel(activeServer.id, {
+      const data = await createChannel(activeServer.id, {
         name: name.trim(),
         type,
         isPrivate
       });
 
-      await refreshServerDetails(activeServer.id);
-      if (type === CHANNEL_TYPES.TEXT) {
+      if (data?.channel) {
         setActiveChannel(data.channel);
       }
       closeModal('createChannel');

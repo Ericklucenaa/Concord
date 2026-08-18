@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { api } from '../../services/api';
 import { X, Send, Copy, Check, UserPlus } from 'lucide-react';
 
 export default function InviteModal() {
-  const { activeServer, modalState, closeModal } = useServer();
+  const { activeServer, modalState, closeModal, createInvite } = useServer();
   const [username, setUsername] = useState('');
   const [generatedCode, setGeneratedCode] = useState('');
   const [copied, setCopied] = useState(false);
@@ -22,7 +21,7 @@ export default function InviteModal() {
       setIsLoading(true);
       setError('');
       setSuccessMessage('');
-      const data = await api.createInvite(activeServer.id, {
+      const data = await createInvite(activeServer.id, {
         username: username.trim()
       });
 
@@ -39,7 +38,7 @@ export default function InviteModal() {
     try {
       setIsLoading(true);
       setError('');
-      const data = await api.createInvite(activeServer.id, {});
+      const data = await createInvite(activeServer.id, {});
       setGeneratedCode(data.invite.code);
     } catch (err) {
       setError(err.message || 'Erro ao gerar código de convite.');
