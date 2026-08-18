@@ -12,6 +12,8 @@ import {
   UserPlus, 
   Settings, 
   LogOut, 
+  Trash2,
+  Image as ImageIcon,
   Mic, 
   MicOff, 
   Headphones, 
@@ -28,7 +30,9 @@ export default function ChannelSidebar() {
     activeServer, 
     activeChannel, 
     setActiveChannel, 
-    openModal 
+    openModal,
+    deleteServer,
+    leaveServer 
   } = useServer();
   const { user } = useAuth();
   const { 
@@ -116,10 +120,18 @@ export default function ChannelSidebar() {
                 <button 
                   className="dropdown-item btn-secondary" 
                   style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
+                  onClick={() => { setIsMenuOpen(false); openModal('serverSettings'); }}
+                >
+                  <ImageIcon size={16} style={{ color: 'var(--accent-primary)' }} />
+                  Trocar Foto / Nome
+                </button>
+                <button 
+                  className="dropdown-item btn-secondary" 
+                  style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
                   onClick={() => { setIsMenuOpen(false); openModal('invite'); }}
                 >
                   <UserPlus size={16} style={{ color: 'var(--accent-success)' }} />
-                  Convidar Pessoas
+                  Convidar Pessoas (Link)
                 </button>
                 <button 
                   className="dropdown-item btn-secondary" 
@@ -129,8 +141,40 @@ export default function ChannelSidebar() {
                   <Plus size={16} />
                   Criar Canal
                 </button>
+                <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
               </>
             )}
+            
+            {activeServer?.ownerId === user?.id || activeServer?.role === ROLES.OWNER || activeServer?.role === 'owner' ? (
+              <button 
+                className="dropdown-item btn-secondary" 
+                style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
+                onClick={() => { 
+                  setIsMenuOpen(false); 
+                  if (confirm(`Deseja realmente excluir o servidor "${activeServer.name}"?`)) {
+                    deleteServer(activeServer.id);
+                  }
+                }}
+              >
+                <Trash2 size={16} />
+                Excluir Servidor
+              </button>
+            ) : (
+              <button 
+                className="dropdown-item btn-secondary" 
+                style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
+                onClick={() => { 
+                  setIsMenuOpen(false); 
+                  if (confirm(`Deseja sair do servidor "${activeServer.name}"?`)) {
+                    leaveServer(activeServer.id);
+                  }
+                }}
+              >
+                <LogOut size={16} />
+                Sair do Servidor
+              </button>
+            )}
+
             <button 
               className="dropdown-item btn-secondary" 
               style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
