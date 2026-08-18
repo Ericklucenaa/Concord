@@ -257,9 +257,27 @@ export default function ChannelSidebar() {
                 key={channel.id}
                 className={`channel-item ${isActive ? 'active' : ''}`}
                 onClick={() => setActiveChannel(channel)}
+                style={{ justifyContent: 'space-between' }}
               >
-                <Hash className="channel-icon" />
-                <span>{channel.name}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                  <Hash className="channel-icon" />
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {channel.name}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button 
+                    className="icon-btn" 
+                    style={{ padding: 2, opacity: 0.6 }}
+                    title="Convidar para este canal"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openModal('invite', channel.id);
+                    }}
+                  >
+                    <UserPlus size={13} />
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -315,7 +333,7 @@ export default function ChannelSidebar() {
                       title="Convidar para este canal"
                       onClick={(e) => {
                         e.stopPropagation();
-                        openModal('invite');
+                        openModal('invite', channel.id);
                       }}
                     >
                       <UserPlus size={13} />
@@ -400,7 +418,7 @@ export default function ChannelSidebar() {
                     {/* Discord style "Convidar para voz" button */}
                     {isConnectedToThis && (
                       <button
-                        onClick={() => openModal('invite')}
+                        onClick={() => openModal('invite', channel.id)}
                         style={{
                           display: 'flex',
                           alignItems: 'center',

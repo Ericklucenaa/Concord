@@ -3,7 +3,7 @@ import { useServer } from '../../context/ServerContext';
 import { X, Send, Copy, Check, UserPlus, Link as LinkIcon, Sparkles } from 'lucide-react';
 
 export default function InviteModal() {
-  const { activeServer, modalState, closeModal, createInvite } = useServer();
+  const { activeServer, modalState, closeModal, createInvite, selectedChannelForInvite } = useServer();
   const [username, setUsername] = useState('');
   const [generatedCode, setGeneratedCode] = useState('');
   const [copiedLink, setCopiedLink] = useState(false);
@@ -24,7 +24,8 @@ export default function InviteModal() {
       setError('');
       setSuccessMessage('');
       const data = await createInvite(activeServer.id, {
-        username: cleanUser
+        username: cleanUser,
+        channelId: selectedChannelForInvite
       });
 
       setSuccessMessage(data.message || `Convite enviado com sucesso para a caixa de entrada de @${cleanUser}!`);
@@ -40,7 +41,9 @@ export default function InviteModal() {
     try {
       setIsLoading(true);
       setError('');
-      const data = await createInvite(activeServer.id, {});
+      const data = await createInvite(activeServer.id, {
+        channelId: selectedChannelForInvite
+      });
       const code = data?.invite?.code || data?.code || '';
       setGeneratedCode(code);
     } catch (err) {
@@ -123,7 +126,11 @@ export default function InviteModal() {
 
           {/* Generate Discord-Style Invite Link */}
           <div className="form-group">
-            <label className="form-label" style={{ fontWeight: 700 }}>Link de Convite do Servidor (Estilo Discord)</label>
+            <label className="form-label" style={{ fontWeight: 700 }}>
+              {selectedChannelForInvite 
+                ? `Link de Convite Exclusivo para o Canal #${activeServer.channels?.find(c => c.id === selectedChannelForInvite)?.name || 'Canal'}`
+                : 'Link de Convite do Servidor (Estilo Discord)'}
+            </label>
             {generatedCode ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 8 }}>

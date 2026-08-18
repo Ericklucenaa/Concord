@@ -29,6 +29,7 @@ export function ServerProvider({ children }) {
   const [serverMembers, setServerMembers] = useState([]);
   const [pendingInvites, setPendingInvites] = useState([]);
   const [isLoadingServers, setIsLoadingServers] = useState(false);
+  const [selectedChannelForInvite, setSelectedChannelForInvite] = useState(null);
 
   // Modals state
   const [modalState, setModalState] = useState({
@@ -41,8 +42,18 @@ export function ServerProvider({ children }) {
     channelPermissions: false
   });
 
-  const openModal = (modalName) => setModalState((prev) => ({ ...prev, [modalName]: true }));
-  const closeModal = (modalName) => setModalState((prev) => ({ ...prev, [modalName]: false }));
+  const openModal = (modalName, data = null) => {
+    setModalState((prev) => ({ ...prev, [modalName]: true }));
+    if (modalName === 'invite' && data) {
+      setSelectedChannelForInvite(data);
+    }
+  };
+  const closeModal = (modalName) => {
+    setModalState((prev) => ({ ...prev, [modalName]: false }));
+    if (modalName === 'invite') {
+      setSelectedChannelForInvite(null);
+    }
+  };
 
   const refreshServers = useCallback(async () => {
     if (!isAuthenticated) return;
@@ -56,26 +67,35 @@ export function ServerProvider({ children }) {
           const exists = data.servers.find((s) => s.id === prev.id);
           return exists || data.servers[0];
         });
-        return;
+        return data.servers;
       }
       throw new Error('No servers from backend API');
     } catch (err) {
       // Cloud Firestore + LocalStorage sync
       let combinedServers = [];
+      let storedLocal = [];
       try {
-        const cloudServers = await getUserServersFromCloud(user?.id, user?.username);
-        const storedLocal = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
-        
-        const serverMap = new Map();
-        cloudServers.forEach((s) => serverMap.set(String(s.id), s));
-        storedLocal.forEach((s) => {
-          if (!serverMap.has(String(s.id))) serverMap.set(String(s.id), s);
-        });
+        storedLocal = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
+      } catch (e) {
+        console.warn('Error reading local storage:', e);
+      }
 
-        combinedServers = Array.from(serverMap.values());
+      let cloudServers = [];
+      try {
+        cloudServers = await getUserServersFromCloud(user?.id, user?.username);
       } catch (cloudErr) {
         console.warn('Cloud server sync note:', cloudErr);
       }
+
+      const serverMap = new Map();
+      cloudServers.forEach((s) => serverMap.set(String(s.id), s));
+      storedLocal.forEach((s) => {
+        if (s && s.id && !serverMap.has(String(s.id))) {
+          serverMap.set(String(s.id), s);
+        }
+      });
+
+      combinedServers = Array.from(serverMap.values());
 
       if (combinedServers.length === 0) {
         // Create initial default server for user
@@ -121,6 +141,7 @@ export function ServerProvider({ children }) {
         });
       }
       setServerMembers(combinedServers[0]?.members || []);
+      return combinedServers;
     } finally {
       setIsLoadingServers(false);
     }
@@ -491,12 +512,17 @@ export function ServerProvider({ children }) {
         receiverUsername: receiverUser ? receiverUser.username : (inviteData?.username ? inviteData.username.replace(/^@/, '') : null),
         code,
         status: 'pending',
+        channelId: inviteData?.channelId || null,
         createdAt: new Date().toISOString()
       };
 
-      // Save invite and server to Firestore cloud
-      await saveInviteToCloud(newInvite);
-      await saveServerToCloud(targetServer);
+      // Save invite and server to Firestore cloud (wrapped in try-catch to allow local success even if offline/blocked)
+      try {
+        await saveInviteToCloud(newInvite);
+        await saveServerToCloud(targetServer);
+      } catch (cloudErr) {
+        console.warn('Could not save invite/server to cloud Firestore:', cloudErr);
+      }
 
       if (newInvite.receiverUsername) {
         const targetNick = newInvite.receiverUsername.toLowerCase();
@@ -528,7 +554,17 @@ export function ServerProvider({ children }) {
 
     try {
       const data = await api.joinByCode(cleanCode);
-      await refreshServers();
+      const updatedServers = await refreshServers();
+      if (data && data.serverId && updatedServers) {
+        const s = updatedServers.find((serv) => serv.id === data.serverId);
+        if (s) {
+          setActiveServer(s);
+          if (s.channels?.length > 0) {
+            const chan = s.channels.find((c) => c.id === data.channelId) || s.channels.find((c) => c.type === 'text') || s.channels[0];
+            setActiveChannel(chan);
+          }
+        }
+      }
       return data;
     } catch (apiErr) {
       console.warn('Backend API joinByCode not reachable, searching cloud invite:', apiErr);
@@ -549,8 +585,9 @@ export function ServerProvider({ children }) {
 
         setActiveServer(joinedServer);
         if (joinedServer.channels?.length > 0) {
+          const targetChan = joinedServer.channels.find((c) => c.id === cloudData.invite?.channelId);
           const firstText = joinedServer.channels.find((c) => c.type === 'text');
-          setActiveChannel(firstText || joinedServer.channels[0]);
+          setActiveChannel(targetChan || firstText || joinedServer.channels[0]);
         }
 
         return { 
@@ -632,6 +669,7 @@ export function ServerProvider({ children }) {
         serverMembers,
         pendingInvites,
         isLoadingServers,
+        selectedChannelForInvite,
         modalState,
         openModal,
         closeModal,

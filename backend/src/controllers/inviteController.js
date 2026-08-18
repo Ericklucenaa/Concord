@@ -14,7 +14,7 @@ function generateRandomCode(length = 8) {
 export async function createInvite(req, res) {
   try {
     const { serverId } = req.params;
-    const { username } = req.body;
+    const { username, channelId } = req.body;
     const senderId = req.user.id;
 
     const server = await db.get('SELECT * FROM servers WHERE id = ?', [serverId]);
@@ -52,8 +52,8 @@ export async function createInvite(req, res) {
     const code = generateRandomCode(8).toUpperCase();
 
     await db.run(
-      'INSERT INTO invites (id, server_id, sender_id, receiver_id, code, status) VALUES (?, ?, ?, ?, ?, ?)',
-      [inviteId, serverId, senderId, receiverUser ? receiverUser.id : null, code, INVITE_STATUS.PENDING]
+      'INSERT INTO invites (id, server_id, sender_id, receiver_id, code, status, channel_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [inviteId, serverId, senderId, receiverUser ? receiverUser.id : null, code, INVITE_STATUS.PENDING, channelId || null]
     );
 
     const invite = {
@@ -66,6 +66,7 @@ export async function createInvite(req, res) {
       receiverUsername: receiverUser ? receiverUser.username : null,
       code,
       status: INVITE_STATUS.PENDING,
+      channelId: channelId || null,
       createdAt: new Date().toISOString()
     };
 
@@ -117,7 +118,8 @@ export async function joinByCode(req, res) {
 
     return res.json({
       message: `Você entrou no servidor ${server.name}!`,
-      serverId: server.id
+      serverId: server.id,
+      channelId: invite.channel_id || null
     });
   } catch (err) {
     console.error('Join by code error:', err);

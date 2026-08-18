@@ -148,6 +148,7 @@ export async function initDb() {
       receiver_id TEXT,
       code TEXT UNIQUE NOT NULL,
       status TEXT DEFAULT 'pending',
+      channel_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE,
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -161,5 +162,13 @@ export async function initDb() {
   `;
 
   await db.exec(schema);
+  
+  // Safely add channel_id column to invites table if it does not exist
+  try {
+    await db.exec('ALTER TABLE invites ADD COLUMN channel_id TEXT;');
+  } catch (e) {
+    // Column already exists, ignore
+  }
+
   console.log('Database initialized successfully with WAL mode & foreign keys enabled.');
 }
