@@ -32,6 +32,7 @@ export default function SettingsModal() {
     selectedOutputDevice, 
     setSelectedInputDevice, 
     setSelectedOutputDevice,
+    refreshAudioDevices,
     micVolumeLevel
   } = useVoice();
 
@@ -45,6 +46,10 @@ export default function SettingsModal() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState('');
+
+  const [isScanningDevices, setIsScanningDevices] = useState(false);
+  const [deviceScanMessage, setDeviceScanMessage] = useState('');
+  const [isPlayingSoundTest, setIsPlayingSoundTest] = useState(false);
 
   const fileInputRef = useRef(null);
   const [isTestingMic, setIsTestingMic] = useState(false);
@@ -101,6 +106,75 @@ export default function SettingsModal() {
       loop();
     } catch (err) {
       console.warn('Mic test error:', err);
+    }
+  };
+
+  // Scan and validate real audio hardware devices
+  const handleScanRealDevices = async () => {
+    try {
+      setIsScanningDevices(true);
+      setDeviceScanMessage('');
+      const res = await refreshAudioDevices(true);
+      setDeviceScanMessage(`✓ Validação concluída: ${res.inputs.length} microfone(s) e ${res.outputs.length} dispositivo(s) de som reais detectados no seu PC.`);
+      setTimeout(() => setDeviceScanMessage(''), 5000);
+    } catch (err) {
+      console.warn('Scan devices failed:', err);
+    } finally {
+      setIsScanningDevices(false);
+    }
+  };
+
+  // Play a pleasant chime tone to test the chosen speaker/headset
+  const handleTestOutputSound = () => {
+    try {
+      setIsPlayingSoundTest(true);
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+
+      // Note 1 (523.25 Hz - C5)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(523.25, ctx.currentTime);
+      gain1.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start();
+      osc1.stop(ctx.currentTime + 0.4);
+
+      // Note 2 (659.25 Hz - E5)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(659.25, ctx.currentTime + 0.15);
+      gain2.gain.setValueAtTime(0.18, ctx.currentTime + 0.15);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(ctx.currentTime + 0.15);
+      osc2.stop(ctx.currentTime + 0.6);
+
+      // Note 3 (783.99 Hz - G5)
+      const osc3 = ctx.createOscillator();
+      const gain3 = ctx.createGain();
+      osc3.type = 'sine';
+      osc3.frequency.setValueAtTime(783.99, ctx.currentTime + 0.3);
+      gain3.gain.setValueAtTime(0.2, ctx.currentTime + 0.3);
+      gain3.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.9);
+      osc3.connect(gain3);
+      gain3.connect(ctx.destination);
+      osc3.start(ctx.currentTime + 0.3);
+      osc3.stop(ctx.currentTime + 0.9);
+
+      setTimeout(() => {
+        setIsPlayingSoundTest(false);
+        ctx.close().catch(() => {});
+      }, 1000);
+    } catch (err) {
+      console.warn('Audio test error:', err);
+      setIsPlayingSoundTest(false);
     }
   };
 
@@ -418,8 +492,39 @@ export default function SettingsModal() {
               {/* AUDIO TAB */}
               {activeTab === 'audio' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {/* Real Hardware Device Validation Banner */}
+                  <div style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>Dispositivos de Áudio do Computador</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                          Identifica e valida os microfones e alto-falantes reais conectados ao seu PC.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+                        onClick={handleScanRealDevices}
+                        disabled={isScanningDevices}
+                      >
+                        <RefreshCw size={13} className={isScanningDevices ? 'spin' : ''} />
+                        {isScanningDevices ? 'Validando...' : 'Escanear Dispositivos'}
+                      </button>
+                    </div>
+
+                    {deviceScanMessage && (
+                      <div style={{ fontSize: 12, color: 'var(--accent-success)', backgroundColor: 'rgba(16, 185, 129, 0.12)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16, 185, 129, 0.3)', marginTop: 8 }}>
+                        {deviceScanMessage}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="form-group">
-                    <label className="form-label">Dispositivo de Entrada (Microfone)</label>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Entrada (Microfone Real)</label>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{inputDevices.length} detectado(s)</span>
+                    </div>
                     <select 
                       className="form-select"
                       value={selectedInputDevice}
@@ -427,31 +532,48 @@ export default function SettingsModal() {
                     >
                       {inputDevices.map((dev) => (
                         <option key={dev.deviceId} value={dev.deviceId}>
-                          {dev.label || `Microfone (${dev.deviceId.substring(0, 5)})`}
+                          🎤 {dev.label || `Microfone (${dev.deviceId.substring(0, 5)})`}
                         </option>
                       ))}
                     </select>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Dispositivo de Saída (Alto-falantes / Fone)</label>
-                    <select 
-                      className="form-select"
-                      value={selectedOutputDevice}
-                      onChange={(e) => setSelectedOutputDevice(e.target.value)}
-                    >
-                      {outputDevices.map((dev) => (
-                        <option key={dev.deviceId} value={dev.deviceId}>
-                          {dev.label || `Alto-falante (${dev.deviceId.substring(0, 5)})`}
-                        </option>
-                      ))}
-                    </select>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Saída (Alto-falantes / Fone Real)</label>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{outputDevices.length} detectado(s)</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <select 
+                        className="form-select"
+                        value={selectedOutputDevice}
+                        onChange={(e) => setSelectedOutputDevice(e.target.value)}
+                        style={{ flex: 1 }}
+                      >
+                        {outputDevices.map((dev) => (
+                          <option key={dev.deviceId} value={dev.deviceId}>
+                            🔊 {dev.label || `Alto-falante (${dev.deviceId.substring(0, 5)})`}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0 12px', fontSize: 12, whiteSpace: 'nowrap' }}
+                        onClick={handleTestOutputSound}
+                        disabled={isPlayingSoundTest}
+                        title="Tocar som de teste no alto-falante selecionado"
+                      >
+                        <Volume2 size={15} style={{ color: isPlayingSoundTest ? 'var(--accent-success)' : undefined }} />
+                        {isPlayingSoundTest ? 'Tocando Som...' : 'Testar Saída'}
+                      </button>
+                    </div>
                   </div>
 
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
-                    <label className="form-label">Teste de Microfone</label>
+                    <label className="form-label">Teste de Microfone em Tempo Real</label>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
-                      Fale no microfone para testar os níveis de volume antes de entrar em salas de voz.
+                      Fale no microfone para calibrar o volume e verificar a captação antes de entrar em salas de voz.
                     </p>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -461,7 +583,7 @@ export default function SettingsModal() {
                         onClick={toggleTestMic}
                       >
                         <Mic size={16} />
-                        {isTestingMic ? 'Parar Teste' : 'Iniciar Teste'}
+                        {isTestingMic ? 'Parar Teste' : 'Iniciar Teste de Microfone'}
                       </button>
 
                       {/* Decibel Meter Bar */}

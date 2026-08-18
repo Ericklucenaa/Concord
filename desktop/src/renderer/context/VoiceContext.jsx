@@ -49,34 +49,64 @@ export function VoiceProvider({ children }) {
     loadIceConfig();
   }, []);
 
-  // Enumerate Audio Devices
-  const enumerateAudioDevices = useCallback(async () => {
+  // Enumerate & Validate Real Audio Devices
+  const refreshAudioDevices = useCallback(async (requestPermission = false) => {
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        return { inputs: [], outputs: [] };
+      }
+
+      if (requestPermission) {
+        try {
+          const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          tempStream.getTracks().forEach((track) => track.stop());
+        } catch (permErr) {
+          console.warn('Microphone permission not granted yet:', permErr);
+        }
+      }
+
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === 'audioinput');
-      const outputs = devices.filter((d) => d.kind === 'audiooutput');
+      const inputs = devices.filter((d) => d.kind === 'audioinput' && d.deviceId);
+      const outputs = devices.filter((d) => d.kind === 'audiooutput' && d.deviceId);
 
-      setInputDevices(inputs);
-      setOutputDevices(outputs);
+      const formattedInputs = inputs.map((d, index) => ({
+        deviceId: d.deviceId,
+        label: d.label || (index === 0 ? 'Microfone Padrão do Sistema' : `Microfone ${index + 1}`),
+        groupId: d.groupId
+      }));
 
-      if (inputs.length > 0 && !selectedInputDevice) {
-        setSelectedInputDevice(inputs[0].deviceId);
+      const formattedOutputs = outputs.map((d, index) => ({
+        deviceId: d.deviceId,
+        label: d.label || (index === 0 ? 'Alto-falante / Fone Padrão' : `Saída de Áudio ${index + 1}`),
+        groupId: d.groupId
+      }));
+
+      setInputDevices(formattedInputs);
+      setOutputDevices(formattedOutputs);
+
+      if (formattedInputs.length > 0 && (!selectedInputDevice || !formattedInputs.some(d => d.deviceId === selectedInputDevice))) {
+        setSelectedInputDevice(formattedInputs[0].deviceId);
       }
-      if (outputs.length > 0 && !selectedOutputDevice) {
-        setSelectedOutputDevice(outputs[0].deviceId);
+      if (formattedOutputs.length > 0 && (!selectedOutputDevice || !formattedOutputs.some(d => d.deviceId === selectedOutputDevice))) {
+        setSelectedOutputDevice(formattedOutputs[0].deviceId);
       }
+
+      return { inputs: formattedInputs, outputs: formattedOutputs };
     } catch (err) {
       console.warn('Could not enumerate audio devices:', err);
+      return { inputs: [], outputs: [] };
     }
   }, [selectedInputDevice, selectedOutputDevice]);
 
   useEffect(() => {
-    enumerateAudioDevices();
-    navigator.mediaDevices.addEventListener('devicechange', enumerateAudioDevices);
-    return () => {
-      navigator.mediaDevices.removeEventListener('devicechange', enumerateAudioDevices);
-    };
-  }, [enumerateAudioDevices]);
+    refreshAudioDevices();
+    if (navigator.mediaDevices?.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => refreshAudioDevices(false));
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', () => refreshAudioDevices(false));
+      };
+    }
+  }, [refreshAudioDevices]);
 
   // Audio Analyzer for Speaking Indicator
   const startSpeakingDetector = (stream) => {
@@ -502,7 +532,8 @@ export function VoiceProvider({ children }) {
         selectedInputDevice,
         selectedOutputDevice,
         setSelectedInputDevice,
-        setSelectedOutputDevice
+        setSelectedOutputDevice,
+        refreshAudioDevices
       }}
     >
       {children}
