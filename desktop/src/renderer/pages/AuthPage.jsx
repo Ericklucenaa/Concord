@@ -69,7 +69,9 @@ export default function AuthPage() {
       }
     } catch (err) {
       console.error('Google sign-in error:', err);
-      if (
+      if (err.code === 'auth/unauthorized-domain' || (err.message && err.message.toLowerCase().includes('unauthorized'))) {
+        setError('O login do Google via pop-up requer domínio web. No aplicativo Desktop instalado, faça login ou cadastre-se abaixo usando seu @Apelido/E-mail e Senha!');
+      } else if (
         err.code !== 'auth/popup-closed-by-user' && 
         err.code !== 'auth/cancelled-popup-request'
       ) {
