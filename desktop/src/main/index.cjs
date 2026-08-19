@@ -71,6 +71,67 @@ ipcMain.handle('window:is-maximized', () => {
   return mainWindow ? mainWindow.isMaximized() : false;
 });
 
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const { spawn } = require('child_process');
+
+function downloadFile(url, dest, onProgress) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(dest);
+
+    function makeRequest(currentUrl) {
+      const client = currentUrl.startsWith('https:') ? https : http;
+
+      const req = client.get(currentUrl, {
+        headers: {
+          'User-Agent': 'Concord-Desktop-App'
+        }
+      }, (res) => {
+        // Follow redirects (e.g. GitHub releases to AWS S3 CDN)
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return makeRequest(res.headers.location);
+        }
+
+        if (res.statusCode !== 200) {
+          file.close();
+          fs.unlink(dest, () => {});
+          return reject(new Error(`Download failed with status ${res.statusCode}`));
+        }
+
+        const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+        let receivedBytes = 0;
+
+        res.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+          if (onProgress && totalBytes > 0) {
+            const percent = Math.min(100, Math.round((receivedBytes / totalBytes) * 100));
+            onProgress({
+              percent,
+              transferred: receivedBytes,
+              total: totalBytes
+            });
+          }
+        });
+
+        res.pipe(file);
+
+        file.on('finish', () => {
+          file.close(() => resolve(dest));
+        });
+      });
+
+      req.on('error', (err) => {
+        file.close();
+        fs.unlink(dest, () => {});
+        reject(err);
+      });
+    }
+
+    makeRequest(url);
+  });
+}
+
 ipcMain.handle('window:close', () => {
   if (mainWindow) mainWindow.close();
 });
@@ -78,6 +139,39 @@ ipcMain.handle('window:close', () => {
 ipcMain.handle('app:open-external', (_, url) => {
   if (url && (url.startsWith('http:') || url.startsWith('https:'))) {
     shell.openExternal(url);
+  }
+});
+
+// Auto-Update Download and Silent/Instant Install
+ipcMain.handle('updater:download-and-install', async (event, { downloadUrl, version }) => {
+  try {
+    const tempDir = app.getPath('temp');
+    const destPath = path.join(tempDir, `Concord-Setup-${version || Date.now()}.exe`);
+
+    let targetUrl = downloadUrl;
+    if (!targetUrl || targetUrl.endsWith('/releases') || targetUrl.endsWith('/releases/latest')) {
+      targetUrl = `https://github.com/Ericklucenaa/Concord/releases/download/v${version}/Concord-Setup-${version}.exe`;
+    }
+
+    await downloadFile(targetUrl, destPath, (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('updater:progress', progress);
+      }
+    });
+
+    // Run the installer silently/detached and quit the current running app instance
+    spawn(destPath, [], { detached: true, stdio: 'ignore' }).unref();
+    setTimeout(() => {
+      app.quit();
+    }, 800);
+
+    return { success: true };
+  } catch (error) {
+    console.error('Auto update error, falling back to browser download:', error);
+    if (downloadUrl) {
+      shell.openExternal(downloadUrl);
+    }
+    return { success: false, error: error.message };
   }
 });
 

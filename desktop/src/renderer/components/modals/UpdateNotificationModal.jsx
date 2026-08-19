@@ -4,7 +4,7 @@ import { listenToAppVersionInCloud, getLatestAppVersionFromCloud } from '../../s
 
 export const CURRENT_APP_VERSION = '1.0.0';
 
-// Helper to compare semver versions (e.g. 1.0.1 > 1.0.0)
+// Helper to compare semver versions (e.g. 1.0.2 > 1.0.0)
 function isNewerVersion(latest, current) {
   if (!latest || !current) return false;
   const parse = (v) => v.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
@@ -18,11 +18,18 @@ function isNewerVersion(latest, current) {
 }
 
 export default function UpdateNotificationModal() {
+  const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI);
+
+  // If running in browser / Web, DO NOT show update modal at all
+  if (!isElectron) {
+    return null;
+  }
+
   const [updateInfo, setUpdateInfo] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
-
-  const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusText, setStatusText] = useState('');
 
   // Check version on startup and listen for live broadcasts
   useEffect(() => {
@@ -84,39 +91,52 @@ export default function UpdateNotificationModal() {
     setIsOpen(false);
   };
 
-  const handleApplyUpdate = () => {
+  const handleApplyUpdate = async () => {
     setIsUpdating(true);
+    setStatusText('Iniciando download da atualização...');
+    setDownloadProgress(5);
 
-    if (isElectron) {
-      // Desktop: Open download link or GitHub releases page
+    try {
+      if (window.electronAPI?.onUpdateProgress) {
+        window.electronAPI.onUpdateProgress((prog) => {
+          if (prog?.percent !== undefined) {
+            setDownloadProgress(prog.percent);
+            setStatusText(`Baixando atualização... ${prog.percent}%`);
+          }
+        });
+      }
+
+      if (window.electronAPI?.downloadAndInstallUpdate) {
+        setStatusText('Baixando nova versão...');
+        const res = await window.electronAPI.downloadAndInstallUpdate({
+          downloadUrl: updateInfo?.downloadUrl,
+          version: updateInfo?.version
+        });
+
+        if (res && res.success) {
+          setStatusText('Atualização pronta! Reiniciando aplicativo...');
+          setDownloadProgress(100);
+        } else {
+          // If direct installation was redirected to browser
+          setStatusText('Download iniciado no seu navegador.');
+          setTimeout(() => setIsOpen(false), 2000);
+        }
+      } else {
+        const targetUrl = updateInfo?.downloadUrl || 'https://github.com/Ericklucenaa/Concord/releases/latest';
+        if (window.electronAPI?.openExternal) {
+          window.electronAPI.openExternal(targetUrl);
+        } else {
+          window.open(targetUrl, '_blank');
+        }
+        setTimeout(() => setIsOpen(false), 1500);
+      }
+    } catch (err) {
+      console.error('Update error:', err);
+      setStatusText('Erro ao atualizar automaticamente. Abrindo página de download...');
       const targetUrl = updateInfo?.downloadUrl || 'https://github.com/Ericklucenaa/Concord/releases/latest';
       if (window.electronAPI?.openExternal) {
         window.electronAPI.openExternal(targetUrl);
-      } else {
-        window.open(targetUrl, '_blank');
       }
-      setTimeout(() => {
-        setIsUpdating(false);
-        setIsOpen(false);
-      }, 1000);
-    } else {
-      // Web: Clear service workers / cache and reload immediately
-      try {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then((registrations) => {
-            registrations.forEach((reg) => reg.unregister());
-          });
-        }
-        if ('caches' in window) {
-          caches.keys().then((names) => {
-            names.forEach((name) => caches.delete(name));
-          });
-        }
-      } catch (e) {}
-
-      setTimeout(() => {
-        window.location.reload(true);
-      }, 500);
     }
   };
 
@@ -145,7 +165,7 @@ export default function UpdateNotificationModal() {
             position: 'relative'
           }}
         >
-          {!updateInfo.isMandatory && (
+          {!updateInfo.isMandatory && !isUpdating && (
             <button 
               className="icon-btn" 
               onClick={handleDismiss} 
@@ -173,7 +193,7 @@ export default function UpdateNotificationModal() {
           </div>
 
           <h3 style={{ fontSize: 18, fontWeight: 800, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>
-            Nova Versão Disponível!
+            Nova Versão do Concord Disponível!
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
             <span style={{ backgroundColor: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: 4, fontFamily: 'var(--font-mono)' }}>
@@ -186,7 +206,7 @@ export default function UpdateNotificationModal() {
           </div>
         </div>
 
-        {/* Body with Release Notes */}
+        {/* Body with Release Notes & Progress Bar */}
         <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>
@@ -209,15 +229,34 @@ export default function UpdateNotificationModal() {
             </div>
           </div>
 
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-            {isElectron 
-              ? '💡 Ao clicar em Atualizar, o novo instalador atualizado (.exe) será baixado para o seu computador.' 
-              : '💡 A aplicação será recarregada instantaneamente com a versão mais recente.'}
-          </div>
+          {/* Download & Installation Progress */}
+          {isUpdating ? (
+            <div style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{statusText || 'Atualizando aplicativo...'}</span>
+                <strong style={{ color: 'var(--accent-primary)' }}>{downloadProgress}%</strong>
+              </div>
+              <div style={{ width: '100%', height: 8, backgroundColor: 'var(--bg-secondary)', borderRadius: 4, overflow: 'hidden' }}>
+                <div 
+                  style={{ 
+                    height: '100%', 
+                    width: `${downloadProgress}%`, 
+                    backgroundColor: 'var(--accent-primary)', 
+                    transition: 'width 0.3s ease',
+                    borderRadius: 4
+                  }} 
+                />
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              💡 O Concord baixará e instalará a nova versão automaticamente no seu computador.
+            </div>
+          )}
 
           {/* Action Buttons */}
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            {!updateInfo.isMandatory && (
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            {!updateInfo.isMandatory && !isUpdating && (
               <button 
                 type="button" 
                 className="btn btn-secondary" 
@@ -235,15 +274,15 @@ export default function UpdateNotificationModal() {
               onClick={handleApplyUpdate}
               disabled={isUpdating}
             >
-              {isElectron ? (
+              {isUpdating ? (
                 <>
-                  <Download size={16} />
-                  {isUpdating ? 'Abrindo...' : 'Baixar Atualização'}
+                  <RefreshCw size={16} className="spin" />
+                  Atualizando...
                 </>
               ) : (
                 <>
-                  <RefreshCw size={16} className={isUpdating ? 'spin' : ''} />
-                  {isUpdating ? 'Atualizando...' : 'Atualizar Agora'}
+                  <Download size={16} />
+                  Atualizar Automaticamente
                 </>
               )}
             </button>

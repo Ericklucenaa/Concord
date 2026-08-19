@@ -17,5 +17,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   signInWithGoogleNative: () => ipcRenderer.invoke('auth:google-login'),
 
   // Open external URL in system browser
-  openExternal: (url) => ipcRenderer.invoke('app:open-external', url)
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+
+  // Auto Updater
+  downloadAndInstallUpdate: (data) => ipcRenderer.invoke('updater:download-and-install', data),
+  onUpdateProgress: (callback) => {
+    const listener = (_, data) => callback(data);
+    ipcRenderer.on('updater:progress', listener);
+    return () => ipcRenderer.removeListener('updater:progress', listener);
+  }
 });
