@@ -22,23 +22,31 @@ export default function MiniStreamPlayer() {
 
   const isPresenter = isScreenSharing;
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
-  const streamReady = isPresenter ? Boolean(localScreenStream) : (activePresenter && remoteScreenStreams.has(activePresenter.userId));
+  const streamReady = isPresenter 
+    ? Boolean(localScreenStream && localScreenStream.active) 
+    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
   const hasStream = isPresenter || isViewer;
 
   // Only show mini player if we have an active stream BUT the user is currently viewing a text channel
   const isViewingTextChannel = activeChannel?.type === 'text';
 
   useEffect(() => {
-    if (!videoRef.current || !hasStream || !isViewingTextChannel) return;
+    const videoEl = videoRef.current;
+    if (!videoEl || !hasStream || !isViewingTextChannel) return;
 
+    let currentStream = null;
     if (isPresenter && localScreenStream) {
-      videoRef.current.srcObject = localScreenStream;
-      videoRef.current.play().catch(() => {});
+      currentStream = localScreenStream;
     } else if (activePresenter && remoteScreenStreams.has(activePresenter.userId)) {
-      videoRef.current.srcObject = remoteScreenStreams.get(activePresenter.userId);
-      videoRef.current.play().catch(() => {});
+      currentStream = remoteScreenStreams.get(activePresenter.userId);
+    }
+
+    if (currentStream && currentStream.active && currentStream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      videoEl.srcObject = currentStream;
+      videoEl.play().catch(() => {});
     } else {
-      videoRef.current.srcObject = null;
+      videoEl.srcObject = null;
+      try { videoEl.load(); } catch (e) {}
     }
   }, [hasStream, isViewingTextChannel, isPresenter, localScreenStream, activePresenter, remoteScreenStreams]);
 

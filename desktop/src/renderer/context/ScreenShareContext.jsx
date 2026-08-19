@@ -238,9 +238,32 @@ export function ScreenShareProvider({ children }) {
     }
 
     // Close screen peer connections
-    screenPeerConnectionsRef.current.forEach((pc) => pc.close());
+    screenPeerConnectionsRef.current.forEach((pc) => {
+      try { pc.close(); } catch (e) {}
+    });
     screenPeerConnectionsRef.current.clear();
   }, [socket, activeVoiceChannel, activePresenter, user?.id, voiceUsers]);
+
+  // Clean up screen sharing on window refresh or tab close
+  useEffect(() => {
+    const handleUnload = () => {
+      if (isScreenSharing && activeVoiceChannel?.id && user?.id) {
+        updateVoiceScreenSharingInCloud(activeVoiceChannel.id, user.id, false, null);
+        for (const remoteUser of voiceUsers) {
+          if (remoteUser.userId !== user.id) {
+            sendScreenSignalInCloud(activeVoiceChannel.id, user.id, remoteUser.userId, 'screen_stopped', {});
+          }
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, [isScreenSharing, activeVoiceChannel?.id, user?.id, voiceUsers]);
 
   const watchStream = (presenterUser, channel) => {
     if (!presenterUser) return;
@@ -267,7 +290,7 @@ export function ScreenShareProvider({ children }) {
   // Synchronize presenter state with Firestore voice room updates
   useEffect(() => {
     const handleVoiceUpdate = (e) => {
-      const { channelId, activePresenter: cloudPresenter } = e.detail || {};
+      const { channelId, activePresenter: cloudPresenter, users } = e.detail || {};
       if (activeVoiceChannel && String(channelId) === String(activeVoiceChannel.id)) {
         if (!cloudPresenter) {
           setActivePresenter((prev) => {
@@ -277,6 +300,15 @@ export function ScreenShareProvider({ children }) {
             }
             return prev;
           });
+        } else if (cloudPresenter.userId !== user?.id) {
+          // If presenter is not in room users list or no longer marked as sharing, clear immediately
+          const presenterStillSharing = users?.some(
+            (u) => (String(u.userId) === String(cloudPresenter.userId) || u.username === cloudPresenter.username) && u.isScreenSharing
+          );
+          if (!presenterStillSharing) {
+            setActivePresenter(null);
+            setRemoteScreenStreams(new Map());
+          }
         }
       }
     };
@@ -312,7 +344,7 @@ export function ScreenShareProvider({ children }) {
         });
         const pc = screenPeerConnectionsRef.current.get(fromUserId);
         if (pc) {
-          pc.close();
+          try { pc.close(); } catch (e) {}
           screenPeerConnectionsRef.current.delete(fromUserId);
         }
       }
@@ -323,6 +355,27 @@ export function ScreenShareProvider({ children }) {
           const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
           screenPeerConnectionsRef.current.set(fromUserId, pc);
 
+          const cleanupPresenter = () => {
+            setRemoteScreenStreams((prev) => {
+              const next = new Map(prev);
+              next.delete(fromUserId);
+              return next;
+            });
+            setActivePresenter((prev) => (prev?.userId === fromUserId ? null : prev));
+          };
+
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+              cleanupPresenter();
+            }
+          };
+
+          pc.oniceconnectionstatechange = () => {
+            if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+              cleanupPresenter();
+            }
+          };
+
           pc.onicecandidate = (event) => {
             if (event.candidate) {
               sendScreenSignalInCloud(channelId, user.id, fromUserId, 'candidate', event.candidate);
@@ -332,6 +385,10 @@ export function ScreenShareProvider({ children }) {
           pc.ontrack = (event) => {
             const [remoteStream] = event.streams;
             if (remoteStream) {
+              remoteStream.getVideoTracks().forEach((track) => {
+                track.onended = cleanupPresenter;
+              });
+
               setRemoteScreenStreams((prev) => {
                 const next = new Map(prev);
                 next.set(fromUserId, remoteStream);
@@ -350,7 +407,7 @@ export function ScreenShareProvider({ children }) {
         }
       }
 
-      // 3. If presenter receives an answer from viewer
+      // 4. If presenter receives an answer from viewer
       if (type === 'answer') {
         try {
           const pc = screenPeerConnectionsRef.current.get(fromUserId);
@@ -362,7 +419,7 @@ export function ScreenShareProvider({ children }) {
         }
       }
 
-      // 4. If either receives an ICE candidate
+      // 5. If either receives an ICE candidate
       if (type === 'candidate') {
         try {
           const pc = screenPeerConnectionsRef.current.get(fromUserId);

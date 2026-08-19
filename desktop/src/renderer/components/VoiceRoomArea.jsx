@@ -49,17 +49,22 @@ export default function VoiceRoomArea() {
 
   // Attach active video stream (local or remote) to video element
   useEffect(() => {
-    if (!videoRef.current) return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
 
+    let currentStream = null;
     if (isScreenSharing && localScreenStream) {
-      videoRef.current.srcObject = localScreenStream;
-      videoRef.current.play().catch((e) => console.warn('Local screen video play:', e));
+      currentStream = localScreenStream;
     } else if (activePresenter && remoteScreenStreams.has(activePresenter.userId)) {
-      const stream = remoteScreenStreams.get(activePresenter.userId);
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch((e) => console.warn('Remote screen video play:', e));
+      currentStream = remoteScreenStreams.get(activePresenter.userId);
+    }
+
+    if (currentStream && currentStream.active && currentStream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      videoEl.srcObject = currentStream;
+      videoEl.play().catch((e) => console.warn('Screen video play:', e));
     } else {
-      videoRef.current.srcObject = null;
+      videoEl.srcObject = null;
+      try { videoEl.load(); } catch (e) {}
     }
   }, [isScreenSharing, localScreenStream, activePresenter, remoteScreenStreams]);
 
@@ -87,7 +92,9 @@ export default function VoiceRoomArea() {
   };
 
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
-  const streamReady = isScreenSharing ? Boolean(localScreenStream) : (activePresenter && remoteScreenStreams.has(activePresenter.userId));
+  const streamReady = isScreenSharing 
+    ? Boolean(localScreenStream && localScreenStream.active) 
+    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
   const hasActiveStream = isScreenSharing || isViewer;
 
   return (
