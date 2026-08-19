@@ -564,31 +564,60 @@ export function listenToVoiceRoomInCloud(channelId, callback) {
   if (!channelId) return () => {};
   try {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
-    return onSnapshot(roomRef, (snap) => {
-      if (snap && snap.exists()) {
-        const data = snap.data();
-        const rawUsers = data.users || [];
-        const now = Date.now();
+    let lastData = null;
 
-        // Filter out stale users who disconnected or closed app without clean exit (timeout > 35s)
-        const activeUsers = rawUsers.filter((u) => {
-          if (!u) return false;
-          if (u.lastSeen && (now - Number(u.lastSeen) > 35000)) {
-            return false;
-          }
-          return true;
-        });
+    const filterAndNotify = (data) => {
+      if (!data) {
+        callback([], null);
+        return;
+      }
+      const rawUsers = data.users || [];
+      const now = Date.now();
 
-        // If stale users were detected, purge them from Firestore document
-        if (activeUsers.length !== rawUsers.length) {
+      // STRICT timeout: User MUST have a heartbeat (lastSeen) within the last 18 seconds!
+      const activeUsers = rawUsers.filter((u) => {
+        if (!u) return false;
+        const lastSeen = Number(u.lastSeen) || (data.updatedAt ? new Date(data.updatedAt).getTime() : 0);
+        // If lastSeen is missing or older than 18 seconds, user is OFFLINE/STALE!
+        if (!lastSeen || (now - lastSeen > 18000)) {
+          return false;
+        }
+        return true;
+      });
+
+      // Purge dead users from Firestore document
+      if (activeUsers.length !== rawUsers.length) {
+        if (activeUsers.length === 0) {
+          deleteDoc(roomRef).catch(() => {});
+        } else {
           setDoc(roomRef, { users: activeUsers, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
         }
+      }
 
-        callback(activeUsers, data.activePresenter || null);
+      callback(activeUsers, data.activePresenter || null);
+    };
+
+    // Auto-reevaluate every 4 seconds so offline users vanish in real-time even without Firestore writes
+    const interval = setInterval(() => {
+      if (lastData) {
+        filterAndNotify(lastData);
+      }
+    }, 4000);
+
+    const unsub = onSnapshot(roomRef, (snap) => {
+      if (snap && snap.exists()) {
+        lastData = snap.data();
+        filterAndNotify(lastData);
       } else {
+        lastData = null;
         callback([], null);
       }
     }, (err) => {});
+
+    return () => {
+      clearInterval(interval);
+      unsub();
+    };
   } catch (err) {
     return () => {};
   }
@@ -610,24 +639,25 @@ export async function setUserPresenceInCloud(userId, username, status = 'online'
 export function listenToUserPresenceInCloud(callback) {
   try {
     const q = collection(firestore, 'concord_users');
-    return onSnapshot(q, (snapshot) => {
+    let lastSnapList = [];
+
+    const evaluatePresence = () => {
       const statusMap = new Map();
       const now = Date.now();
 
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
+      lastSnapList.forEach((data) => {
         if (data && data.id) {
           const rawLastSeen = data.lastSeen;
           let isRecentlyActive = false;
 
           if (typeof rawLastSeen === 'number') {
-            isRecentlyActive = (now - rawLastSeen) < 45000;
+            isRecentlyActive = (now - rawLastSeen) < 18000;
           } else if (typeof rawLastSeen === 'string') {
             const timeDiff = now - new Date(rawLastSeen).getTime();
-            isRecentlyActive = !isNaN(timeDiff) && timeDiff < 45000;
+            isRecentlyActive = !isNaN(timeDiff) && timeDiff < 18000;
           }
 
-          // User is online ONLY if they sent heartbeat within last 45s and status !== 'offline'
+          // User is online ONLY if they sent heartbeat within last 18s and status !== 'offline'
           const realStatus = isRecentlyActive && data.status !== 'offline' ? (data.status || 'online') : 'offline';
 
           statusMap.set(String(data.id), realStatus);
@@ -637,7 +667,23 @@ export function listenToUserPresenceInCloud(callback) {
         }
       });
       callback(statusMap);
+    };
+
+    // Re-evaluate every 4 seconds so offline users update in real-time
+    const interval = setInterval(evaluatePresence, 4000);
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      lastSnapList = [];
+      snapshot.forEach((docSnap) => {
+        lastSnapList.push(docSnap.data());
+      });
+      evaluatePresence();
     }, (err) => {});
+
+    return () => {
+      clearInterval(interval);
+      unsub();
+    };
   } catch (err) {
     return () => {};
   }

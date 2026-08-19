@@ -919,7 +919,7 @@ export function VoiceProvider({ children }) {
     }
   };
 
-  // Real-time Voice Heartbeat (every 12 seconds)
+  // Real-time Voice Heartbeat (every 6 seconds)
   useEffect(() => {
     if (!activeVoiceChannel?.id || !user?.id) return;
     
@@ -928,12 +928,12 @@ export function VoiceProvider({ children }) {
 
     const interval = setInterval(() => {
       sendVoiceHeartbeatInCloud(activeVoiceChannel.id, user.id, user.username);
-    }, 12000);
+    }, 6000);
 
     return () => clearInterval(interval);
   }, [activeVoiceChannel?.id, user?.id, user?.username]);
 
-  // Real-time Global Online Presence Heartbeat (every 18 seconds)
+  // Real-time Global Online Presence Heartbeat (every 6 seconds)
   useEffect(() => {
     if (!user?.id) return;
 
@@ -941,7 +941,7 @@ export function VoiceProvider({ children }) {
 
     const interval = setInterval(() => {
       setUserPresenceInCloud(user.id, user.username, user.status || 'online');
-    }, 18000);
+    }, 6000);
 
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
