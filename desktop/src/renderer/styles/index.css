@@ -1172,3 +1172,53 @@ body {
 .auth-link:hover {
   text-decoration: underline;
 }
+
+/* Message Hover Actions Toolbar */
+.message-item .message-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  transform: translateY(-2px);
+}
+
+.message-item:hover .message-actions {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.icon-btn.hover-danger:hover {
+  color: var(--accent-danger) !important;
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+/* Floating Mini Stream Player */
+.mini-stream-player {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.mini-stream-player:hover {
+  transform: scale(1.03);
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 16px 40px rgba(99, 102, 241, 0.25) !important;
+}
+
+/* Keyframe Animations */
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+

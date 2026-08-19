@@ -4,7 +4,8 @@ import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
 import { api } from '../services/api';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
-import { joinVoiceInCloud, leaveVoiceInCloud, switchVoiceRoomInCloud, listenToVoiceRoomInCloud } from '../services/cloudSync';
+import { joinVoiceInCloud, leaveVoiceInCloud, switchVoiceRoomInCloud, listenToVoiceRoomInCloud, listenToSoundboardInCloud } from '../services/cloudSync';
+import { soundSynthesizer } from '../services/soundEffects';
 
 const VoiceContext = createContext(null);
 
@@ -585,6 +586,19 @@ export function VoiceProvider({ children }) {
       window.removeEventListener('pagehide', handleVoiceUnload);
     };
   }, [activeVoiceChannel?.id, user?.id, user?.username]);
+
+  // Listen to Soundboard events in active voice room
+  useEffect(() => {
+    if (!activeVoiceChannel?.id) return;
+    const unsub = listenToSoundboardInCloud(activeVoiceChannel.id, (data) => {
+      if (data?.soundId && String(data.userId) !== String(user?.id)) {
+        soundSynthesizer.play(data.soundId);
+      }
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [activeVoiceChannel?.id, user?.id]);
 
   return (
     <VoiceContext.Provider

@@ -21,9 +21,11 @@ import {
   PhoneOff,
   Radio,
   Sliders,
-  X
+  X,
+  Sparkles
 } from 'lucide-react';
 import { CHANNEL_TYPES, ROLES, USER_STATUS } from '@shared/constants';
+import SoundboardModal from './SoundboardModal';
 
 export default function ChannelSidebar() {
   const { 
@@ -32,7 +34,8 @@ export default function ChannelSidebar() {
     setActiveChannel, 
     openModal,
     deleteServer,
-    leaveServer 
+    leaveServer,
+    deleteChannel
   } = useServer();
   const { user } = useAuth();
   const { 
@@ -59,6 +62,7 @@ export default function ChannelSidebar() {
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [selectedVoiceUser, setSelectedVoiceUser] = useState(null);
+  const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
 
   if (!activeServer) {
     return (
@@ -649,6 +653,14 @@ export default function ChannelSidebar() {
             >
               <Headphones size={14} />
             </button>
+
+            <button 
+              className="voice-action-btn"
+              onClick={() => setIsSoundboardOpen(true)}
+              title="Abrir Soundboard (Painel de Sons)"
+            >
+              <Sparkles size={14} style={{ color: 'var(--accent-warning)' }} />
+            </button>
           </div>
         </div>
       )}
@@ -698,6 +710,12 @@ export default function ChannelSidebar() {
           </button>
         </div>
       </footer>
+
+      {/* Soundboard Modal */}
+      <SoundboardModal 
+        isOpen={isSoundboardOpen} 
+        onClose={() => setIsSoundboardOpen(false)} 
+      />
     </aside>
   );
 }

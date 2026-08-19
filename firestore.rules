@@ -44,6 +44,9 @@ service cloud.firestore {
     match /concord_voice_signals/{signalId} {
       allow read, write: if true;
     }
+    match /concord_soundboard/{soundId} {
+      allow read, write: if true;
+    }
     
     // Default fallback
     match /{document=**} {

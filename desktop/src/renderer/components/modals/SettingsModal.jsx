@@ -40,6 +40,7 @@ export default function SettingsModal() {
   const [username, setUsername] = useState(user?.username || '');
   const [copiedNickname, setCopiedNickname] = useState(false);
   const [status, setStatus] = useState(user?.status || USER_STATUS.ONLINE);
+  const [customStatus, setCustomStatus] = useState(user?.customStatus || '');
   const [avatarPreview, setAvatarPreview] = useState(user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username || 'user'}`);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -138,42 +139,38 @@ export default function SettingsModal() {
       osc1.type = 'sine';
       osc1.frequency.setValueAtTime(523.25, ctx.currentTime);
       gain1.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
       osc1.connect(gain1);
       gain1.connect(ctx.destination);
-      osc1.start();
-      osc1.stop(ctx.currentTime + 0.4);
+      osc1.start(ctx.currentTime);
+      osc1.stop(ctx.currentTime + 0.5);
 
       // Note 2 (659.25 Hz - E5)
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
       osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(659.25, ctx.currentTime + 0.15);
-      gain2.gain.setValueAtTime(0.18, ctx.currentTime + 0.15);
-      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc2.frequency.setValueAtTime(659.25, ctx.currentTime + 0.12);
+      gain2.gain.setValueAtTime(0.15, ctx.currentTime + 0.12);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.65);
       osc2.connect(gain2);
       gain2.connect(ctx.destination);
-      osc2.start(ctx.currentTime + 0.15);
-      osc2.stop(ctx.currentTime + 0.6);
+      osc2.start(ctx.currentTime + 0.12);
+      osc2.stop(ctx.currentTime + 0.65);
 
       // Note 3 (783.99 Hz - G5)
       const osc3 = ctx.createOscillator();
       const gain3 = ctx.createGain();
       osc3.type = 'sine';
-      osc3.frequency.setValueAtTime(783.99, ctx.currentTime + 0.3);
-      gain3.gain.setValueAtTime(0.2, ctx.currentTime + 0.3);
-      gain3.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.9);
+      osc3.frequency.setValueAtTime(783.99, ctx.currentTime + 0.24);
+      gain3.gain.setValueAtTime(0.18, ctx.currentTime + 0.24);
+      gain3.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.85);
       osc3.connect(gain3);
       gain3.connect(ctx.destination);
-      osc3.start(ctx.currentTime + 0.3);
-      osc3.stop(ctx.currentTime + 0.9);
+      osc3.start(ctx.currentTime + 0.24);
+      osc3.stop(ctx.currentTime + 0.85);
 
-      setTimeout(() => {
-        setIsPlayingSoundTest(false);
-        ctx.close().catch(() => {});
-      }, 1000);
-    } catch (err) {
-      console.warn('Audio test error:', err);
+      setTimeout(() => setIsPlayingSoundTest(false), 900);
+    } catch (e) {
       setIsPlayingSoundTest(false);
     }
   };
@@ -182,20 +179,14 @@ export default function SettingsModal() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      setError('Por favor, selecione um arquivo de imagem válido (PNG, JPG, WEBP).');
-      return;
-    }
-
     if (file.size > 5 * 1024 * 1024) {
-      setError('A imagem deve ter no máximo 5MB.');
+      setError('A foto de perfil deve ter no máximo 5MB.');
       return;
     }
 
-    setError('');
     const reader = new FileReader();
     reader.onload = (event) => {
-      setAvatarPreview(event.target.result);
+      setAvatarPreview(event.target?.result);
     };
     reader.readAsDataURL(file);
   };
@@ -237,6 +228,7 @@ export default function SettingsModal() {
         username: cleanUser,
         avatar: avatarPreview,
         status,
+        customStatus: customStatus.trim(),
         ...(newPassword ? { currentPassword, newPassword } : {})
       });
 
@@ -436,6 +428,21 @@ export default function SettingsModal() {
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
                       Outras pessoas usam este @apelido para convidar você para servidores e canais. Deve ter entre 3 e 24 caracteres (letras, números e _).
+                    </span>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Status Personalizado / Atividade</label>
+                    <input 
+                      type="text" 
+                      className="form-input" 
+                      placeholder="ex: 🎮 Jogando Summoners War, 🎧 Ouvindo Música, 💻 Focado..." 
+                      value={customStatus} 
+                      onChange={(e) => setCustomStatus(e.target.value)}
+                      maxLength={60}
+                    />
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                      Aparece para seus amigos no seu perfil e na lista de membros.
                     </span>
                   </div>
 

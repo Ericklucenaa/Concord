@@ -12,8 +12,10 @@ import {
   VolumeX,
   Sliders,
   Settings2,
-  ExternalLink
+  ExternalLink,
+  Sparkles
 } from 'lucide-react';
+import SoundboardModal from './SoundboardModal';
 
 export default function VoiceRoomArea() {
   const { user } = useAuth();
@@ -42,6 +44,7 @@ export default function VoiceRoomArea() {
   const containerRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTheater, setIsTheater] = useState(false);
+  const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
 
   // Attach active video stream (local or remote) to video element
   useEffect(() => {
@@ -177,6 +180,15 @@ export default function VoiceRoomArea() {
 
             <button 
               className="icon-btn" 
+              onClick={() => setIsSoundboardOpen(true)} 
+              title="Abrir Soundboard"
+              style={{ padding: '6px', color: 'var(--accent-warning)' }}
+            >
+              <Sparkles size={16} />
+            </button>
+
+            <button 
+              className="icon-btn" 
               onClick={toggleFullscreen} 
               title={isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'}
               style={{ padding: '6px' }}
@@ -193,14 +205,22 @@ export default function VoiceRoomArea() {
             Você está conectado. Fale livremente ou compartilhe sua tela com o grupo.
           </p>
 
-          <button 
-            className="btn btn-primary"
-            onClick={() => setIsPickerOpen(true)}
-            style={{ marginTop: 8 }}
-          >
-            <Tv size={16} />
-            Transmitir Minha Tela
-          </button>
+          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+            <button 
+              className="btn btn-primary"
+              onClick={() => setIsPickerOpen(true)}
+            >
+              <Tv size={16} />
+              Transmitir Minha Tela
+            </button>
+            <button 
+              className="btn btn-secondary"
+              onClick={() => setIsSoundboardOpen(true)}
+            >
+              <Sparkles size={16} style={{ color: 'var(--accent-warning)' }} />
+              Soundboard
+            </button>
+          </div>
         </div>
       )}
 
@@ -233,6 +253,12 @@ export default function VoiceRoomArea() {
           );
         })}
       </div>
+
+      {/* Soundboard Modal */}
+      <SoundboardModal 
+        isOpen={isSoundboardOpen} 
+        onClose={() => setIsSoundboardOpen(false)} 
+      />
     </div>
   );
 }

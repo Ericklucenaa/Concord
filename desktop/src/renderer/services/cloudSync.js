@@ -500,3 +500,71 @@ export function listenToScreenSignalsInCloud(myUserId, callback) {
     return () => {};
   }
 }
+
+export async function sendSoundboardInCloud(channelId, userId, username, soundId) {
+  if (!channelId || !soundId) return;
+  try {
+    const soundEventId = `${channelId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const soundDocRef = doc(firestore, 'concord_soundboard', soundEventId);
+    await setDoc(soundDocRef, {
+      channelId: String(channelId),
+      userId: String(userId || ''),
+      username: username || 'Usuário',
+      soundId: soundId,
+      createdAt: Date.now()
+    });
+  } catch (err) {}
+}
+
+export function listenToSoundboardInCloud(channelId, onSound) {
+  if (!channelId) return () => {};
+  try {
+    const q = query(
+      collection(firestore, 'concord_soundboard'),
+      where('channelId', '==', String(channelId))
+    );
+    return onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          if (data && data.soundId) {
+            onSound(data);
+            deleteDoc(change.doc.ref).catch(() => {});
+          }
+        }
+      });
+    }, (err) => {});
+  } catch (err) {
+    return () => {};
+  }
+}
+
+export async function toggleMessageReactionInCloud(messageId, emoji, userId, username) {
+  if (!messageId || !emoji || !userId) return;
+  try {
+    const msgRef = doc(firestore, 'concord_messages', String(messageId));
+    const snap = await getDoc(msgRef);
+    if (snap && snap.exists()) {
+      const data = snap.data();
+      const reactions = data.reactions || {}; // { "❤️": ["user1", "user2"] }
+      const currentUsers = reactions[emoji] || [];
+      const hasReacted = currentUsers.includes(String(userId));
+
+      let updatedUsers = [];
+      if (hasReacted) {
+        updatedUsers = currentUsers.filter((uid) => uid !== String(userId));
+      } else {
+        updatedUsers = [...currentUsers, String(userId)];
+      }
+
+      const updatedReactions = { ...reactions };
+      if (updatedUsers.length > 0) {
+        updatedReactions[emoji] = updatedUsers;
+      } else {
+        delete updatedReactions[emoji];
+      }
+
+      await setDoc(msgRef, { reactions: updatedReactions }, { merge: true });
+    }
+  } catch (err) {}
+}

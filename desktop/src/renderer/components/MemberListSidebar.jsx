@@ -139,7 +139,16 @@ export default function MemberListSidebar() {
           <div className={`status-dot ${member.status || 'offline'}`} />
         </div>
 
-        <span className="member-item-name">{member.username}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, flex: 1 }}>
+          <span className="member-item-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {member.username}
+          </span>
+          {member.customStatus && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
+              {member.customStatus}
+            </span>
+          )}
+        </div>
 
         {member.isStreaming && (
           <span 

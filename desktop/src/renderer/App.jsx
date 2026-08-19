@@ -11,6 +11,7 @@ import ChannelSidebar from './components/ChannelSidebar';
 import ChatArea from './components/ChatArea';
 import VoiceRoomArea from './components/VoiceRoomArea';
 import MemberListSidebar from './components/MemberListSidebar';
+import MiniStreamPlayer from './components/MiniStreamPlayer';
 
 import CreateServerModal from './components/modals/CreateServerModal';
 import CreateChannelModal from './components/modals/CreateChannelModal';
@@ -105,6 +106,9 @@ function MainAppContent() {
 
       {/* 4. Right Sidebar: Server Members */}
       {showMemberList && <MemberListSidebar />}
+
+      {/* Floating Mini Stream Player */}
+      <MiniStreamPlayer />
 
       {/* Modals */}
       <CreateServerModal />
