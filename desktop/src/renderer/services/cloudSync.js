@@ -281,8 +281,13 @@ export async function joinVoiceInCloud(channelId, userInfo) {
     if (snap && snap.exists()) {
       users = snap.data().users || [];
     }
-    // Filter out existing entries for this user
-    users = users.filter((u) => String(u.userId) !== String(userInfo.userId));
+    // Filter out existing entries for this user by userId or username
+    users = users.filter((u) => {
+      if (!u) return false;
+      if (userInfo.userId && String(u.userId) === String(userInfo.userId)) return false;
+      if (userInfo.username && u.username && u.username.toLowerCase() === userInfo.username.toLowerCase()) return false;
+      return true;
+    });
     users.push(userInfo);
     await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
     
@@ -293,14 +298,19 @@ export async function joinVoiceInCloud(channelId, userInfo) {
   }
 }
 
-export async function leaveVoiceInCloud(channelId, userId) {
-  if (!channelId || !userId) return;
+export async function leaveVoiceInCloud(channelId, userId, username) {
+  if (!channelId) return;
   try {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
     const snap = await getDoc(roomRef);
     if (snap && snap.exists()) {
       let users = snap.data().users || [];
-      users = users.filter((u) => String(u.userId) !== String(userId));
+      users = users.filter((u) => {
+        if (!u) return false;
+        if (userId && String(u.userId) === String(userId)) return false;
+        if (username && u.username && u.username.toLowerCase() === username.toLowerCase()) return false;
+        return true;
+      });
       if (users.length === 0) {
         await deleteDoc(roomRef);
       } else {
@@ -310,6 +320,18 @@ export async function leaveVoiceInCloud(channelId, userId) {
     }
   } catch (err) {
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [] } }));
+  }
+}
+
+export async function switchVoiceRoomInCloud(newChannelId, userInfo, allServerVoiceChannelIds = []) {
+  if (!userInfo) return;
+  for (const otherChId of allServerVoiceChannelIds) {
+    if (String(otherChId) !== String(newChannelId)) {
+      await leaveVoiceInCloud(otherChId, userInfo.userId, userInfo.username);
+    }
+  }
+  if (newChannelId) {
+    await joinVoiceInCloud(newChannelId, userInfo);
   }
 }
 

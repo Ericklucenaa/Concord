@@ -300,9 +300,26 @@ export default function ChannelSidebar() {
 
           {voiceChannels.map((channel) => {
             const isConnectedToThis = activeVoiceChannel?.id === channel.id;
-            const currentUsersInChannel = isConnectedToThis 
+            let currentUsersInChannel = isConnectedToThis 
               ? voiceUsers 
               : (voiceChannelUsersMap.get(channel.id) || []);
+
+            // If not connected to this channel, filter out self to avoid ghost presence
+            if (!isConnectedToThis && user) {
+              currentUsersInChannel = currentUsersInChannel.filter(
+                (u) => String(u.userId) !== String(user.id) && u.username?.toLowerCase() !== user.username?.toLowerCase()
+              );
+            }
+
+            // Deduplicate by userId and username
+            const seenUsers = new Set();
+            currentUsersInChannel = currentUsersInChannel.filter((u) => {
+              if (!u) return false;
+              const key = (u.userId || '') + '_' + (u.username || '');
+              if (seenUsers.has(key)) return false;
+              seenUsers.add(key);
+              return true;
+            });
 
             return (
               <div key={channel.id} style={{ marginBottom: 4 }}>

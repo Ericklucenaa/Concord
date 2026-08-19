@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
 import { api } from '../services/api';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
-import { joinVoiceInCloud, leaveVoiceInCloud, listenToVoiceRoomInCloud } from '../services/cloudSync';
+import { joinVoiceInCloud, leaveVoiceInCloud, switchVoiceRoomInCloud, listenToVoiceRoomInCloud } from '../services/cloudSync';
 
 const VoiceContext = createContext(null);
 
@@ -61,9 +61,7 @@ export function VoiceProvider({ children }) {
         try {
           const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
           tempStream.getTracks().forEach((track) => track.stop());
-        } catch (permErr) {
-          console.warn('Microphone permission not granted yet:', permErr);
-        }
+        } catch (permErr) {}
       }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -94,7 +92,6 @@ export function VoiceProvider({ children }) {
 
       return { inputs: formattedInputs, outputs: formattedOutputs };
     } catch (err) {
-      console.warn('Could not enumerate audio devices:', err);
       return { inputs: [], outputs: [] };
     }
   }, [selectedInputDevice, selectedOutputDevice]);
@@ -162,9 +159,7 @@ export function VoiceProvider({ children }) {
       };
 
       checkVolume();
-    } catch (err) {
-      console.warn('Speaking detector init failed:', err);
-    }
+    } catch (err) {}
   };
 
   const stopSpeakingDetector = () => {
@@ -222,7 +217,7 @@ export function VoiceProvider({ children }) {
         audioEl.srcObject = remoteStream;
         const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
         audioEl.volume = isDeafened ? 0 : volume;
-        audioEl.play().catch((e) => console.warn('Autoplay audio blocked:', e));
+        audioEl.play().catch(() => {});
       }
     };
 
@@ -242,7 +237,7 @@ export function VoiceProvider({ children }) {
 
     const participantInfo = {
       userId: user?.id || 'offline-user',
-      username: user?.username || 'Offline User',
+      username: user?.username || 'Usuário',
       avatar: user?.avatar || '',
       isMuted: isMuted,
       isDeafened: isDeafened,
@@ -251,9 +246,12 @@ export function VoiceProvider({ children }) {
       socketId: socket?.id || 'offline'
     };
 
+    const allVoiceIds = (activeServer?.channels || [])
+      .filter((c) => c.type === 'voice')
+      .map((c) => c.id);
+
     if (socket && socket.connected) {
       try {
-        // 1. Get Local Microphone Audio Stream
         const constraints = {
           audio: {
             deviceId: selectedInputDevice ? { exact: selectedInputDevice } : undefined,
@@ -267,16 +265,12 @@ export function VoiceProvider({ children }) {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
 
-        // Apply initial mute state
         stream.getAudioTracks().forEach((track) => {
           track.enabled = !isMuted;
         });
 
         startSpeakingDetector(stream);
-
         setActiveVoiceChannel(channel);
-
-        // 2. Emit VOICE_JOIN to socket server
         socket.emit(SOCKET_EVENTS.VOICE_JOIN, { channelId: channel.id });
       } catch (err) {
         console.error('Failed to capture audio stream for voice:', err);
@@ -286,34 +280,30 @@ export function VoiceProvider({ children }) {
       // Offline / Firebase Firestore mode fallback
       setActiveVoiceChannel(channel);
       setVoiceUsers([participantInfo]);
-      await joinVoiceInCloud(channel.id, participantInfo);
+      await switchVoiceRoomInCloud(channel.id, participantInfo, allVoiceIds);
     }
   };
 
   // Leave Voice Channel
   const leaveVoice = useCallback(() => {
-    if (socket && activeVoiceChannel) {
+    if (socket && socket.connected && activeVoiceChannel) {
       socket.emit(SOCKET_EVENTS.VOICE_LEAVE, { channelId: activeVoiceChannel.id });
     }
 
-    if ((!socket || !socket.connected) && activeVoiceChannel && user?.id) {
-      leaveVoiceInCloud(activeVoiceChannel.id, user.id);
+    if ((!socket || !socket.connected) && activeVoiceChannel) {
+      leaveVoiceInCloud(activeVoiceChannel.id, user?.id, user?.username);
     }
 
-    // Stop speaking detector
     stopSpeakingDetector();
 
-    // Stop local audio tracks
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     }
 
-    // Close all peer connections
     peerConnectionsRef.current.forEach((pc) => pc.close());
     peerConnectionsRef.current.clear();
 
-    // Cleanup audio elements
     remoteAudiosRef.current.forEach((audioEl) => {
       audioEl.srcObject = null;
       audioEl.remove();
@@ -322,7 +312,7 @@ export function VoiceProvider({ children }) {
 
     setActiveVoiceChannel(null);
     setVoiceUsers([]);
-  }, [socket, activeVoiceChannel, user?.id]);
+  }, [socket, activeVoiceChannel, user?.id, user?.username]);
 
   // Toggle Mute
   const toggleMute = () => {
@@ -534,19 +524,6 @@ export function VoiceProvider({ children }) {
     };
   }, [socket, user?.id, activeVoiceChannel?.id]);
 
-  // Firestore listener for the active voice channel when socket is offline
-  useEffect(() => {
-    if (!activeVoiceChannel?.id || (socket && socket.connected)) return;
-
-    const unsubscribeCloud = listenToVoiceRoomInCloud(activeVoiceChannel.id, (cloudUsers) => {
-      setVoiceUsers(cloudUsers);
-    });
-
-    return () => {
-      if (unsubscribeCloud) unsubscribeCloud();
-    };
-  }, [activeVoiceChannel?.id, socket, socket?.connected]);
-
   // Firestore listener for all voice channels on active server when socket is offline
   useEffect(() => {
     if (!activeServer || (socket && socket.connected)) {
@@ -556,17 +533,33 @@ export function VoiceProvider({ children }) {
     const voiceChannels = activeServer.channels?.filter((c) => c.type === 'voice') || [];
     const unsubscribes = voiceChannels.map((channel) => {
       return listenToVoiceRoomInCloud(channel.id, (users) => {
+        const seen = new Set();
+        let cleanUsers = (users || []).filter((u) => {
+          if (!u) return false;
+          const key = (u.userId || '') + '_' + (u.username || '');
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        if (activeVoiceChannel?.id !== channel.id && user) {
+          cleanUsers = cleanUsers.filter(
+            (u) => String(u.userId) !== String(user.id) && u.username?.toLowerCase() !== user.username?.toLowerCase()
+          );
+        }
+
         setVoiceChannelUsersMap((prev) => {
           const next = new Map(prev);
-          if (users && users.length > 0) {
-            next.set(channel.id, users);
+          if (cleanUsers.length > 0) {
+            next.set(channel.id, cleanUsers);
           } else {
             next.delete(channel.id);
           }
           return next;
         });
+
         if (activeVoiceChannel?.id === channel.id) {
-          setVoiceUsers(users);
+          setVoiceUsers(cleanUsers);
         }
       });
     });
@@ -574,7 +567,7 @@ export function VoiceProvider({ children }) {
     return () => {
       unsubscribes.forEach((unsub) => unsub());
     };
-  }, [activeServer, socket, socket?.connected, activeVoiceChannel?.id]);
+  }, [activeServer, socket, socket?.connected, activeVoiceChannel?.id, user?.id, user?.username]);
 
   return (
     <VoiceContext.Provider
