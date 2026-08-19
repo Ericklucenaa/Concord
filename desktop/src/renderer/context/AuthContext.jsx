@@ -20,7 +20,18 @@ export function AuthProvider({ children }) {
       return null;
     }
   });
-  const [token, setToken] = useState(api.getToken());
+  const [token, setToken] = useState(() => {
+    const t = api.getToken();
+    if (t) return t;
+    try {
+      const saved = localStorage.getItem('concord_cached_user');
+      if (saved) {
+        const u = JSON.parse(saved);
+        if (u?.id) return 'persisted_token_' + u.id;
+      }
+    } catch (e) {}
+    return null;
+  });
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -46,8 +57,9 @@ export function AuthProvider({ children }) {
           username: currentUserData?.username || fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuário',
           email: fbUser.email,
           avatar: currentUserData?.avatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fbUser.email || fbUser.uid)}`,
-          status: 'online',
+          status: currentUserData?.status || 'online',
           customStatus: currentUserData?.customStatus || '',
+          userTag: currentUserData?.userTag || fbUser.uid.substring(0, 4).toUpperCase(),
           createdAt: currentUserData?.createdAt || new Date().toISOString()
         };
 
@@ -55,8 +67,25 @@ export function AuthProvider({ children }) {
         try { localStorage.setItem('concord_cached_user', JSON.stringify(restoredUser)); } catch (e) {}
         setIsLoading(false);
       } else {
-        // If not in Firebase Auth, check local backend API if configured
+        // If not in Firebase Auth, check local cached user to maintain offline/desktop permanent session
+        let cached = null;
+        try {
+          const raw = localStorage.getItem('concord_cached_user');
+          if (raw) cached = JSON.parse(raw);
+        } catch (e) {}
+
         const storedToken = api.getToken();
+        if (cached && cached.id) {
+          setUser(cached);
+          if (!storedToken) {
+            const fallbackTok = 'persisted_token_' + cached.id;
+            api.setToken(fallbackTok);
+            setToken(fallbackTok);
+          }
+          setIsLoading(false);
+          return;
+        }
+
         if (storedToken && api.hasBackend()) {
           try {
             const data = await api.getMe();
@@ -69,11 +98,8 @@ export function AuthProvider({ children }) {
           } catch (err) {}
         }
 
-        if (isMounted && !fbUser) {
-          const cached = localStorage.getItem('concord_cached_user');
-          if (!storedToken && !cached) {
-            setUser(null);
-          }
+        if (isMounted && !fbUser && !cached) {
+          setUser(null);
           setIsLoading(false);
         }
       }
@@ -243,6 +269,8 @@ export function AuthProvider({ children }) {
       api.setToken(data.token);
       setToken(data.token);
       setUser(data.user);
+      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
+      syncUserToCloud(data.user);
       return data;
     } catch (apiErr) {
       console.warn('Backend API login with Google not reachable, using direct Firebase session:', apiErr);
@@ -252,18 +280,27 @@ export function AuthProvider({ children }) {
         email: googleUser.email,
         avatar: googleUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(googleUser.email)}`,
         status: 'online',
+        userTag: googleUser.uid.substring(0, 4).toUpperCase(),
         createdAt: new Date().toISOString()
       };
       const fallbackToken = googleUser.accessToken || ('firebase_token_' + googleUser.uid);
       api.setToken(fallbackToken);
       setToken(fallbackToken);
       setUser(fallbackUser);
+      try { localStorage.setItem('concord_cached_user', JSON.stringify(fallbackUser)); } catch (e) {}
+      syncUserToCloud(fallbackUser);
       return { user: fallbackUser, token: fallbackToken };
     }
   };
 
   const logout = () => {
-    signOutFirebase();
+    try {
+      signOutFirebase();
+    } catch (e) {}
+    try {
+      localStorage.removeItem('concord_cached_user');
+      localStorage.removeItem('concord_token');
+    } catch (e) {}
     api.setToken(null);
     setToken(null);
     setUser(null);
@@ -307,7 +344,7 @@ export function AuthProvider({ children }) {
       value={{
         user,
         token,
-        isAuthenticated: Boolean(user && token),
+        isAuthenticated: Boolean(user && (token || user.id)),
         isLoading,
         login,
         register,

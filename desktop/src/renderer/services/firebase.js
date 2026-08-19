@@ -1,6 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
+  setPersistence,
+  browserLocalPersistence,
+  indexedDBLocalPersistence,
   GoogleAuthProvider, 
   signInWithPopup, 
   signInWithRedirect, 
@@ -39,6 +42,14 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+
+// Force persistent session storage across desktop reboots and browser sessions
+try {
+  setPersistence(auth, browserLocalPersistence).catch(() => {
+    setPersistence(auth, indexedDBLocalPersistence).catch(() => {});
+  });
+} catch (e) {}
+
 export const firestore = getFirestore(app);
 
 export const googleProvider = new GoogleAuthProvider();
