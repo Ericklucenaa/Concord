@@ -1,0 +1,57 @@
+name: CI + Deploy (Firebase Hosting)
+
+# Runs the backend test suite on every push/PR, and — only on pushes to
+# main, and only if the tests pass — builds the frontend and deploys it to
+# Firebase Hosting. This never needs your Firebase credentials to leave
+# GitHub: they live encrypted in this repo's Settings → Secrets and
+# Variables → Actions, and only GitHub's own runners ever see them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run backend test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install backend deps
+        working-directory: backend
+        run: npm ci
+      - name: Run tests
+        working-directory: backend
+        run: npm test
+
+  deploy:
+    name: Build & deploy frontend to Firebase Hosting
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install frontend deps
+        working-directory: desktop
+        run: npm ci
+      - name: Build frontend
+        working-directory: desktop
+        env:
+          # Set these two as repo Secrets so the packaged/hosted app points at
+          # your real, publicly-hosted backend instead of localhost:4000.
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_SOCKET_URL: ${{ secrets.VITE_SOCKET_URL }}
+        run: npm run build
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}

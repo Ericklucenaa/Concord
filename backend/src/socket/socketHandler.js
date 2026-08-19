@@ -124,9 +124,15 @@ export function setupSocketIO(httpServer, corsOrigin) {
         const cleanContent = content.trim();
         const messageId = randomUUID();
 
-        // Verify channel exists
+        // Verify channel exists and the sender is actually a member of its server
         const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
         if (!channel) return;
+
+        const member = await db.get(
+          'SELECT * FROM server_members WHERE server_id = ? AND user_id = ?',
+          [channel.server_id, userId]
+        );
+        if (!member) return;
 
         // Save to DB
         await db.run(
@@ -177,6 +183,14 @@ export function setupSocketIO(httpServer, corsOrigin) {
     // ==========================================
     socket.on(SOCKET_EVENTS.VOICE_JOIN, async ({ channelId }) => {
       try {
+        const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
+        if (!channel) return;
+        const member = await db.get(
+          'SELECT * FROM server_members WHERE server_id = ? AND user_id = ?',
+          [channel.server_id, userId]
+        );
+        if (!member) return;
+
         socket.join(`voice:${channelId}`);
         socket.currentVoiceChannel = channelId;
 

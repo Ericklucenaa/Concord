@@ -180,6 +180,33 @@ describe('Concord Realtime (Socket.IO) Integration', () => {
     assert.equal(payload.serverId, serverId);
   });
 
+  test('Security: a stranger (not a server member) cannot rename/delete the channel', async () => {
+    const eveRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'eve_rt', email: 'eve_rt@test.com', password: 'password123' })
+    });
+    const eveToken = (await eveRes.json()).token;
+
+    const renameRes = await fetch(`${baseUrl}/api/channels/${textChannelId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${eveToken}` },
+      body: JSON.stringify({ name: 'hacked' })
+    });
+    assert.equal(renameRes.status, 403);
+
+    const deleteRes = await fetch(`${baseUrl}/api/channels/${textChannelId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${eveToken}` }
+    });
+    assert.equal(deleteRes.status, 403);
+
+    const readMessagesRes = await fetch(`${baseUrl}/api/messages/channel/${textChannelId}`, {
+      headers: { Authorization: `Bearer ${eveToken}` }
+    });
+    assert.equal(readMessagesRes.status, 403);
+  });
+
   test('Cleanup: disconnect sockets', async () => {
     aliceSocket.disconnect();
     bobSocket.disconnect();

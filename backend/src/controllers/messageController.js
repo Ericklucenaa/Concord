@@ -6,8 +6,18 @@ import { getIO } from '../socket/ioRegistry.js';
 export async function getChannelMessages(req, res) {
   try {
     const { channelId } = req.params;
+    const userId = req.user.id;
     const limit = parseInt(req.query.limit) || 50;
     const before = req.query.before;
+
+    const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
+    if (!channel) {
+      return res.status(404).json({ error: 'Canal não encontrado.' });
+    }
+    const member = await getServerMember(channel.server_id, userId);
+    if (!member) {
+      return res.status(403).json({ error: 'Você não é membro deste servidor.' });
+    }
 
     let query = `
       SELECT m.id, m.channel_id as channelId, m.user_id as userId, m.content, m.created_at as createdAt,
