@@ -7,7 +7,7 @@ import {
   signUpWithEmail, 
   signOutFirebase 
 } from '../services/firebase';
-import { syncUserToCloud, setUserPresenceInCloud } from '../services/cloudSync';
+import { syncUserToCloud, setUserPresenceInCloud, findUserByNicknameInCloud } from '../services/cloudSync';
 
 const AuthContext = createContext(null);
 
@@ -47,6 +47,7 @@ export function AuthProvider({ children }) {
           email: fbUser.email,
           avatar: currentUserData?.avatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fbUser.email || fbUser.uid)}`,
           status: 'online',
+          customStatus: currentUserData?.customStatus || '',
           createdAt: currentUserData?.createdAt || new Date().toISOString()
         };
 
@@ -123,23 +124,46 @@ export function AuthProvider({ children }) {
       api.setToken(data.token);
       setToken(data.token);
       setUser(data.user);
+      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
       return data;
     } catch (apiErr) {
       console.warn('Backend API login failed or not available, trying Firebase Auth:', apiErr);
       try {
-        const fbUser = await signInWithEmail(credentials.login, credentials.password);
+        let loginEmail = credentials.login.trim();
+        let customUsername = credentials.login.trim();
+        let customAvatar = null;
+
+        // If user provided a username rather than an email, look up their cloud user
+        if (!loginEmail.includes('@')) {
+          const userDoc = await findUserByNicknameInCloud(loginEmail);
+          if (userDoc) {
+            if (userDoc.email) {
+              loginEmail = userDoc.email;
+            } else {
+              loginEmail = `${loginEmail.toLowerCase()}@concord.app`;
+            }
+            if (userDoc.username) customUsername = userDoc.username;
+            if (userDoc.avatar) customAvatar = userDoc.avatar;
+          } else {
+            loginEmail = `${loginEmail.toLowerCase()}@concord.app`;
+          }
+        }
+
+        const fbUser = await signInWithEmail(loginEmail, credentials.password);
         const fbToken = fbUser.accessToken || ('fb_token_' + fbUser.uid);
         const fbSafeUser = {
           id: fbUser.uid,
-          username: fbUser.displayName || credentials.login.split('@')[0],
+          username: customUsername || fbUser.displayName || credentials.login.split('@')[0],
           email: fbUser.email,
-          avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(credentials.login)}`,
+          avatar: customAvatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(credentials.login)}`,
           status: 'online',
           createdAt: new Date().toISOString()
         };
         api.setToken(fbToken);
         setToken(fbToken);
         setUser(fbSafeUser);
+        try { localStorage.setItem('concord_cached_user', JSON.stringify(fbSafeUser)); } catch (e) {}
+        syncUserToCloud(fbSafeUser);
         return { user: fbSafeUser, token: fbToken };
       } catch (fbErr) {
         console.error('Firebase Auth sign in error:', fbErr);
@@ -169,16 +193,21 @@ export function AuthProvider({ children }) {
       api.setToken(data.token);
       setToken(data.token);
       setUser(data.user);
+      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
       return data;
     } catch (apiErr) {
       console.warn('Backend API register failed or not available, trying Firebase Auth:', apiErr);
       try {
-        const fbUser = await signUpWithEmail(userData.username, userData.email, userData.password);
+        let regEmail = userData.email ? userData.email.trim() : '';
+        if (!regEmail) {
+          regEmail = `${userData.username.trim().toLowerCase()}@concord.app`;
+        }
+        const fbUser = await signUpWithEmail(userData.username, regEmail, userData.password);
         const fbToken = fbUser.accessToken || ('fb_token_' + fbUser.uid);
         const fbSafeUser = {
           id: fbUser.uid,
           username: userData.username.trim(),
-          email: userData.email ? userData.email.trim() : fbUser.email,
+          email: regEmail,
           avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userData.username)}`,
           status: 'online',
           createdAt: new Date().toISOString()
@@ -186,6 +215,8 @@ export function AuthProvider({ children }) {
         api.setToken(fbToken);
         setToken(fbToken);
         setUser(fbSafeUser);
+        try { localStorage.setItem('concord_cached_user', JSON.stringify(fbSafeUser)); } catch (e) {}
+        syncUserToCloud(fbSafeUser);
         return { user: fbSafeUser, token: fbToken };
       } catch (fbErr) {
         console.error('Firebase Auth register error:', fbErr);

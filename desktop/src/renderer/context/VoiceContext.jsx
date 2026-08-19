@@ -3,6 +3,7 @@ import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
 import { api } from '../services/api';
+import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
 import { 
   joinVoiceInCloud, 
   leaveVoiceInCloud, 
