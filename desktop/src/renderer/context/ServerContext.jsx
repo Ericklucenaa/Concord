@@ -5,6 +5,8 @@ import { useSocket } from './SocketContext';
 import { SOCKET_EVENTS } from '@shared/constants';
 import { 
   saveServerToCloud, 
+  deleteServerFromCloud,
+  leaveServerInCloud,
   getServerFromCloud, 
   getUserServersFromCloud, 
   saveInviteToCloud, 
@@ -81,30 +83,36 @@ export function ServerProvider({ children }) {
 
     try {
       setIsLoadingServers(true);
-      // Cloud Firestore + LocalStorage sync
-      let combinedServers = [];
-      let storedLocal = [];
       let cloudServers = [];
+      let fetchSuccess = false;
       try {
         cloudServers = await getUserServersFromCloud(user?.id, user?.username);
+        fetchSuccess = true;
       } catch (cloudErr) {}
 
+      let storedLocal = [];
       try {
         storedLocal = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
       } catch (e) {}
 
-      const serverMap = new Map();
-      cloudServers.forEach((s) => serverMap.set(String(s.id), s));
-      storedLocal.forEach((s) => {
-        if (s && s.id && !serverMap.has(String(s.id))) {
-          serverMap.set(String(s.id), s);
-        }
-      });
+      let combinedServers = [];
+      if (fetchSuccess) {
+        // Cloud is reachable: Firestore is the definitive state
+        combinedServers = cloudServers;
+        try {
+          localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers));
+        } catch (e) {}
+      } else {
+        // Fallback to local storage only if Firestore could not be reached
+        combinedServers = storedLocal;
+      }
 
-      combinedServers = Array.from(serverMap.values());
+      // Check if user has already been initialized
+      const initKey = `concord_init_done_${user?.id || 'anon'}`;
+      const hasInitialized = localStorage.getItem(initKey);
 
-      if (combinedServers.length === 0) {
-        // Create initial default server for user
+      if (combinedServers.length === 0 && !hasInitialized) {
+        // Create initial default server ONLY for brand new accounts
         const initialServer = {
           id: 'concord-space-' + (user?.id ? String(user.id).substring(0, 8) : Date.now()),
           name: user?.username ? `Servidor de ${user.username}` : 'Comunidade Concord',
@@ -131,22 +139,30 @@ export function ServerProvider({ children }) {
 
         saveServerToCloud(initialServer);
         combinedServers = [initialServer];
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers)); } catch (e) {}
+        try { 
+          localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers)); 
+          localStorage.setItem(initKey, 'true');
+        } catch (e) {}
+      } else if (combinedServers.length > 0 && !hasInitialized) {
+        try { localStorage.setItem(initKey, 'true'); } catch (e) {}
       }
 
       setServers(combinedServers);
       setActiveServer((prev) => {
-        if (!prev) return combinedServers[0];
-        const exists = combinedServers.find((s) => s.id === prev.id);
-        return exists || combinedServers[0];
+        if (!prev && combinedServers.length > 0) return combinedServers[0];
+        const exists = combinedServers.find((s) => s.id === prev?.id);
+        return exists || (combinedServers.length > 0 ? combinedServers[0] : null);
       });
-      if (combinedServers[0]?.channels?.length > 0) {
+      if (combinedServers.length > 0 && combinedServers[0]?.channels?.length > 0) {
         setActiveChannel((prev) => {
           if (prev && combinedServers[0].channels.some((c) => c.id === prev.id)) return prev;
           return combinedServers[0].channels[0];
         });
+        setServerMembers(combinedServers[0]?.members || []);
+      } else {
+        setActiveChannel(null);
+        setServerMembers([]);
       }
-      setServerMembers(combinedServers[0]?.members || []);
       return combinedServers;
     } finally {
       setIsLoadingServers(false);
@@ -484,36 +500,54 @@ export function ServerProvider({ children }) {
     if (api.hasBackend()) {
       try {
         await api.deleteServer(serverId);
-        await refreshServers();
-        return;
       } catch (err) {}
     }
+
+    try {
+      await deleteServerFromCloud(serverId);
+    } catch (e) {}
 
     setServers((prev) => {
       const next = prev.filter((s) => s.id !== serverId);
       try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      if (next.length > 0) {
+        setActiveServer(next[0]);
+        setActiveChannel(next[0].channels?.[0] || null);
+        setServerMembers(next[0].members || []);
+      } else {
+        setActiveServer(null);
+        setActiveChannel(null);
+        setServerMembers([]);
+      }
       return next;
     });
-    setActiveServer(null);
-    setActiveChannel(null);
   };
 
   const leaveServer = async (serverId) => {
     if (api.hasBackend()) {
       try {
         await api.leaveServer(serverId);
-        await refreshServers();
-        return;
       } catch (err) {}
     }
+
+    try {
+      await leaveServerInCloud(serverId, user);
+    } catch (e) {}
 
     setServers((prev) => {
       const next = prev.filter((s) => s.id !== serverId);
       try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      if (next.length > 0) {
+        setActiveServer(next[0]);
+        setActiveChannel(next[0].channels?.[0] || null);
+        setServerMembers(next[0].members || []);
+      } else {
+        setActiveServer(null);
+        setActiveChannel(null);
+        setServerMembers([]);
+      }
       return next;
     });
-    setActiveServer(null);
-    setActiveChannel(null);
   };
 
   const createInvite = async (serverId, inviteData) => {

@@ -110,8 +110,42 @@ export async function getServerFromCloud(serverId) {
   return null;
 }
 
+export async function deleteServerFromCloud(serverId) {
+  if (!serverId) return;
+  try {
+    const serverRef = doc(firestore, 'concord_servers', String(serverId));
+    await deleteDoc(serverRef);
+  } catch (err) {}
+}
+
+export async function leaveServerInCloud(serverId, currentUser) {
+  if (!serverId || !currentUser) return;
+  try {
+    const serverRef = doc(firestore, 'concord_servers', String(serverId));
+    const snap = await getDoc(serverRef);
+    if (!snap.exists()) return;
+
+    const serverData = snap.data();
+    let members = (serverData.members || []).filter(
+      (m) => String(m.id) !== String(currentUser.id) && m.username?.toLowerCase() !== currentUser.username?.toLowerCase()
+    );
+
+    // If no members left, delete the server document from Firestore
+    if (members.length === 0) {
+      await deleteDoc(serverRef);
+    } else {
+      let ownerId = serverData.ownerId;
+      if (String(ownerId) === String(currentUser.id)) {
+        ownerId = members[0].id;
+        members[0].role = 'owner';
+      }
+      await updateDoc(serverRef, { members, ownerId, updatedAt: new Date().toISOString() });
+    }
+  } catch (err) {}
+}
+
 export async function getUserServersFromCloud(userId, username) {
-  if (!userId) return [];
+  if (!userId && !username) return [];
   const result = [];
   try {
     const q = collection(firestore, 'concord_servers');
@@ -121,9 +155,9 @@ export async function getUserServersFromCloud(userId, username) {
       const data = docSnap.data();
       if (!data) return;
       const isMember = (data.members || []).some(
-        (m) => m && m.id && String(m.id) === String(userId)
+        (m) => m && ((userId && String(m.id) === String(userId)) || (username && m.username && m.username.toLowerCase() === username.toLowerCase()))
       );
-      const isOwner = data.ownerId && String(data.ownerId) === String(userId);
+      const isOwner = (userId && data.ownerId && String(data.ownerId) === String(userId));
       if (isMember || isOwner) {
         result.push(data);
       }
