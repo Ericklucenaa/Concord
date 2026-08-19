@@ -9,13 +9,19 @@ function getSocketUrl() {
   if (import.meta.env.VITE_SOCKET_URL) {
     return import.meta.env.VITE_SOCKET_URL;
   }
+  if (import.meta.env.VITE_API_URL) {
+    // Fall back to the same host used for the REST API, since the Socket.IO
+    // server always runs alongside the HTTP API in this project.
+    return import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '');
+  }
   if (typeof window !== 'undefined') {
-    const { hostname } = window.location;
+    const { hostname, origin } = window.location;
     if (hostname === 'localhost' || hostname === '127.0.0.1' || !hostname) {
       return 'http://localhost:4000';
     }
-    // In web hosting without explicit backend URL, disable socket connection attempts
-    return null;
+    // Hosted web build without an explicit backend URL configured at build time:
+    // assume the API/Socket.IO server is reachable on the same origin (reverse proxy).
+    return origin;
   }
   return 'http://localhost:4000';
 }

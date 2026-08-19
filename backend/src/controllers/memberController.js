@@ -1,6 +1,7 @@
 import { db } from '../db/database.js';
-import { ROLES } from '../../../shared/constants.js';
+import { ROLES, SOCKET_EVENTS } from '../../../shared/constants.js';
 import { canManageUser, getServerMember } from '../middleware/permissions.js';
+import { emitToServer, emitToUser, leaveUserFromServerRoom } from '../socket/ioRegistry.js';
 
 export async function updateMemberRole(req, res) {
   try {
@@ -36,6 +37,11 @@ export async function updateMemberRole(req, res) {
       [role, serverId, memberId]
     );
 
+    emitToServer(serverId, SOCKET_EVENTS.MEMBER_UPDATED, {
+      serverId,
+      member: { id: memberId, role }
+    });
+
     return res.json({
       message: 'Papel do membro atualizado com sucesso!',
       memberId,
@@ -70,6 +76,16 @@ export async function muteMember(req, res) {
       [isMuted, serverId, memberId]
     );
 
+    emitToServer(serverId, SOCKET_EVENTS.MEMBER_UPDATED, {
+      serverId,
+      member: { id: memberId, mutedByAdmin: Boolean(isMuted) }
+    });
+    emitToServer(serverId, SOCKET_EVENTS.MEMBER_MUTED, {
+      serverId,
+      memberId,
+      mutedByAdmin: Boolean(isMuted)
+    });
+
     return res.json({
       message: isMuted ? 'Usuário silenciado pelo moderador/administrador.' : 'Silenciamento removido.',
       memberId,
@@ -101,6 +117,13 @@ export async function kickMember(req, res) {
       'DELETE FROM server_members WHERE server_id = ? AND user_id = ?',
       [serverId, memberId]
     );
+
+    // Tell the kicked user directly (so their client removes the server from
+    // their sidebar even though they're no longer "in" the server room),
+    // then notify the remaining members that this person is gone.
+    emitToUser(memberId, SOCKET_EVENTS.MEMBER_KICKED, { serverId });
+    emitToServer(serverId, SOCKET_EVENTS.MEMBER_LEFT, { serverId, userId: memberId });
+    leaveUserFromServerRoom(memberId, serverId);
 
     return res.json({ message: 'Membro expulso do servidor com sucesso.', memberId });
   } catch (err) {

@@ -1,6 +1,20 @@
 import { randomUUID } from 'crypto';
 import { db } from '../db/database.js';
-import { CHANNEL_TYPES, ROLES } from '../../../shared/constants.js';
+import { CHANNEL_TYPES, ROLES, SOCKET_EVENTS } from '../../../shared/constants.js';
+import { emitToServer } from '../socket/ioRegistry.js';
+import { getServerMember } from '../middleware/permissions.js';
+
+// Only Owner/Admin can manage channels (create/rename/delete/permissions),
+// mirroring Discord's default "Manage Channels" permission.
+async function assertCanManageChannel(channel, userId) {
+  if (!channel) return { ok: false, status: 404, error: 'Canal não encontrado.' };
+  const member = await getServerMember(channel.server_id, userId);
+  if (!member) return { ok: false, status: 403, error: 'Você não é membro deste servidor.' };
+  if (member.role !== ROLES.OWNER && member.role !== ROLES.ADMIN) {
+    return { ok: false, status: 403, error: 'Você não tem permissão para gerenciar este canal.' };
+  }
+  return { ok: true };
+}
 
 export async function createChannel(req, res) {
   try {
@@ -31,6 +45,8 @@ export async function createChannel(req, res) {
       createdAt: new Date().toISOString()
     };
 
+    emitToServer(serverId, SOCKET_EVENTS.CHANNEL_CREATED, { serverId, channel });
+
     return res.status(201).json({
       message: 'Canal criado com sucesso!',
       channel
@@ -45,10 +61,16 @@ export async function updateChannel(req, res) {
   try {
     const { channelId } = req.params;
     const { name, isPrivate } = req.body;
+    const userId = req.user.id;
 
     const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
     if (!channel) {
       return res.status(404).json({ error: 'Canal não encontrado.' });
+    }
+
+    const permCheck = await assertCanManageChannel(channel, userId);
+    if (!permCheck.ok) {
+      return res.status(permCheck.status).json({ error: permCheck.error });
     }
 
     const updatedName = name !== undefined 
@@ -62,15 +84,19 @@ export async function updateChannel(req, res) {
       [updatedName, updatedPrivate, channelId]
     );
 
+    const updatedChannel = {
+      id: channelId,
+      serverId: channel.server_id,
+      name: updatedName,
+      type: channel.type,
+      isPrivate: Boolean(updatedPrivate)
+    };
+
+    emitToServer(channel.server_id, SOCKET_EVENTS.CHANNEL_UPDATED, { serverId: channel.server_id, channel: updatedChannel });
+
     return res.json({
       message: 'Canal atualizado com sucesso!',
-      channel: {
-        id: channelId,
-        serverId: channel.server_id,
-        name: updatedName,
-        type: channel.type,
-        isPrivate: Boolean(updatedPrivate)
-      }
+      channel: updatedChannel
     });
   } catch (err) {
     console.error('Update channel error:', err);
@@ -81,13 +107,21 @@ export async function updateChannel(req, res) {
 export async function deleteChannel(req, res) {
   try {
     const { channelId } = req.params;
+    const userId = req.user.id;
 
     const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
     if (!channel) {
       return res.status(404).json({ error: 'Canal não encontrado.' });
     }
 
+    const permCheck = await assertCanManageChannel(channel, userId);
+    if (!permCheck.ok) {
+      return res.status(permCheck.status).json({ error: permCheck.error });
+    }
+
     await db.run('DELETE FROM channels WHERE id = ?', [channelId]);
+
+    emitToServer(channel.server_id, SOCKET_EVENTS.CHANNEL_DELETED, { serverId: channel.server_id, channelId });
 
     return res.json({ message: 'Canal excluído com sucesso!' });
   } catch (err) {
@@ -99,6 +133,16 @@ export async function deleteChannel(req, res) {
 export async function getChannelPermissions(req, res) {
   try {
     const { channelId } = req.params;
+    const userId = req.user.id;
+
+    const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
+    if (!channel) {
+      return res.status(404).json({ error: 'Canal não encontrado.' });
+    }
+    const member = await getServerMember(channel.server_id, userId);
+    if (!member) {
+      return res.status(403).json({ error: 'Você não é membro deste servidor.' });
+    }
 
     const permissions = await db.all(
       'SELECT id, channel_id as channelId, role, can_view as canView, can_send_messages as canSendMessages, can_connect_voice as canConnectVoice, can_speak as canSpeak, can_share_screen as canShareScreen FROM channel_permissions WHERE channel_id = ?',
@@ -116,6 +160,13 @@ export async function updateChannelPermissions(req, res) {
   try {
     const { channelId } = req.params;
     const { role, canView, canSendMessages, canConnectVoice, canSpeak, canShareScreen } = req.body;
+    const userId = req.user.id;
+
+    const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
+    const permCheck = await assertCanManageChannel(channel, userId);
+    if (!permCheck.ok) {
+      return res.status(permCheck.status).json({ error: permCheck.error });
+    }
 
     if (!role || !Object.values(ROLES).includes(role)) {
       return res.status(400).json({ error: 'Papel (role) inválido.' });

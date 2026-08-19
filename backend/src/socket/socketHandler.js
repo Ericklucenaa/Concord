@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { verifySocketToken } from '../middleware/auth.js';
 import { db } from '../db/database.js';
 import { SOCKET_EVENTS, USER_STATUS, ROLES } from '../../../shared/constants.js';
+import { registerIO } from './ioRegistry.js';
 
 // Active voice rooms: Map<channelId, Map<userId, { userId, username, avatar, isMuted, isDeafened, isSpeaking, isScreenSharing, socketId }>>
 const voiceRooms = new Map();
@@ -34,6 +35,19 @@ export function setupSocketIO(httpServer, corsOrigin) {
     next();
   });
 
+  // Expose io to REST controllers so they can push realtime updates
+  // (server updates, member changes, invite notifications, etc.)
+  registerIO(
+    io,
+    (targetUserId, event, data) => {
+      const socketIds = userSockets.get(targetUserId);
+      if (socketIds) {
+        socketIds.forEach((sId) => io.to(sId).emit(event, data));
+      }
+    },
+    (targetUserId) => userSockets.get(targetUserId)
+  );
+
   io.on('connection', async (socket) => {
     const userId = socket.user.id;
     const username = socket.user.username;
@@ -43,6 +57,16 @@ export function setupSocketIO(httpServer, corsOrigin) {
       userSockets.set(userId, new Set());
     }
     userSockets.get(userId).add(socket.id);
+
+    // Auto-join a room for every server this user belongs to, so REST-triggered
+    // events (server updates, new members, channel changes) reach them live
+    // without requiring an explicit join message from the client.
+    try {
+      const myServers = await db.all('SELECT server_id FROM server_members WHERE user_id = ?', [userId]);
+      myServers.forEach((row) => socket.join(`server:${row.server_id}`));
+    } catch (err) {
+      console.error('Failed to auto-join server rooms:', err);
+    }
 
     // Update status to online in database
     await db.run('UPDATE users SET status = ? WHERE id = ?', [USER_STATUS.ONLINE, userId]);
@@ -74,6 +98,15 @@ export function setupSocketIO(httpServer, corsOrigin) {
       }
     });
 
+    // Server room join/leave (explicit, in addition to the automatic join above)
+    socket.on(SOCKET_EVENTS.SERVER_JOIN, ({ serverId }) => {
+      if (serverId) socket.join(`server:${serverId}`);
+    });
+
+    socket.on(SOCKET_EVENTS.SERVER_LEAVE, ({ serverId }) => {
+      if (serverId) socket.leave(`server:${serverId}`);
+    });
+
     // Chat Channel Join/Leave
     socket.on(SOCKET_EVENTS.CHANNEL_JOIN, ({ channelId }) => {
       socket.join(`channel:${channelId}`);
@@ -91,9 +124,15 @@ export function setupSocketIO(httpServer, corsOrigin) {
         const cleanContent = content.trim();
         const messageId = randomUUID();
 
-        // Verify channel exists
+        // Verify channel exists and the sender is actually a member of its server
         const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
         if (!channel) return;
+
+        const member = await db.get(
+          'SELECT * FROM server_members WHERE server_id = ? AND user_id = ?',
+          [channel.server_id, userId]
+        );
+        if (!member) return;
 
         // Save to DB
         await db.run(
@@ -144,6 +183,14 @@ export function setupSocketIO(httpServer, corsOrigin) {
     // ==========================================
     socket.on(SOCKET_EVENTS.VOICE_JOIN, async ({ channelId }) => {
       try {
+        const channel = await db.get('SELECT * FROM channels WHERE id = ?', [channelId]);
+        if (!channel) return;
+        const member = await db.get(
+          'SELECT * FROM server_members WHERE server_id = ? AND user_id = ?',
+          [channel.server_id, userId]
+        );
+        if (!member) return;
+
         socket.join(`voice:${channelId}`);
         socket.currentVoiceChannel = channelId;
 

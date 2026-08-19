@@ -7,13 +7,12 @@ import {
 } from '../controllers/inviteController.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { requireServerRole } from '../middleware/permissions.js';
-import { ROLES } from '../../../shared/constants.js';
 
 const router = Router();
 
 router.use(authenticateToken);
 
-router.post('/server/:serverId', requireServerRole([ROLES.OWNER, ROLES.ADMIN, ROLES.MODERATOR, ROLES.MEMBER]), createInvite);
+router.post('/server/:serverId', requireServerRole(), createInvite);
 router.post('/join', joinByCode);
 router.get('/pending', getPendingInvites);
 router.post('/:inviteId/respond', respondInvite);

@@ -17,6 +17,12 @@ import {
 
 const ServerContext = createContext(null);
 
+// Local fallback data must be scoped per-user, otherwise two different accounts
+// sharing the same machine/browser profile would see each other's servers.
+function localServersKey(userId) {
+  return `concord_local_servers_${userId || 'anon'}`;
+}
+
 export function ServerProvider({ children }) {
   const { isAuthenticated, user } = useAuth();
   const { socket } = useSocket();
@@ -74,17 +80,17 @@ export function ServerProvider({ children }) {
       // Cloud Firestore + LocalStorage sync
       let combinedServers = [];
       let storedLocal = [];
-      try {
-        storedLocal = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
-      } catch (e) {
-        console.warn('Error reading local storage:', e);
-      }
-
       let cloudServers = [];
       try {
         cloudServers = await getUserServersFromCloud(user?.id, user?.username);
       } catch (cloudErr) {
         console.warn('Cloud server sync note:', cloudErr);
+      }
+
+      try {
+        storedLocal = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
+      } catch (e) {
+        console.warn('Error reading local storage:', e);
       }
 
       const serverMap = new Map();
@@ -125,7 +131,7 @@ export function ServerProvider({ children }) {
 
         saveServerToCloud(initialServer);
         combinedServers = [initialServer];
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(combinedServers)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers)); } catch (e) {}
       }
 
       setServers(combinedServers);
@@ -267,6 +273,18 @@ export function ServerProvider({ children }) {
       }
     });
 
+    // I was kicked from a server: drop it locally and bounce out of it if it was active
+    socket.on(SOCKET_EVENTS.MEMBER_KICKED, ({ serverId }) => {
+      setServers((prev) => prev.filter((s) => s.id !== serverId));
+      setActiveServer((prev) => {
+        if (prev?.id === serverId) {
+          setActiveChannel(null);
+          return null;
+        }
+        return prev;
+      });
+    });
+
     socket.on(SOCKET_EVENTS.MEMBER_UPDATED, ({ serverId, member }) => {
       if (activeServer?.id === serverId) {
         setServerMembers((prev) => prev.map((m) => m.id === member.id ? { ...m, ...member } : m));
@@ -280,6 +298,18 @@ export function ServerProvider({ children }) {
           channels: [...(prev.channels || []), channel]
         }));
       }
+      setServers((prev) => prev.map((s) => s.id === serverId
+        ? { ...s, channels: [...(s.channels || []), channel] }
+        : s));
+    });
+
+    socket.on(SOCKET_EVENTS.CHANNEL_UPDATED, ({ serverId, channel }) => {
+      const applyUpdate = (list) => (list || []).map((c) => c.id === channel.id ? { ...c, ...channel } : c);
+      if (activeServer?.id === serverId) {
+        setActiveServer((prev) => ({ ...prev, channels: applyUpdate(prev.channels) }));
+        setActiveChannel((prev) => (prev?.id === channel.id ? { ...prev, ...channel } : prev));
+      }
+      setServers((prev) => prev.map((s) => s.id === serverId ? { ...s, channels: applyUpdate(s.channels) } : s));
     });
 
     socket.on(SOCKET_EVENTS.CHANNEL_DELETED, ({ serverId, channelId }) => {
@@ -290,6 +320,9 @@ export function ServerProvider({ children }) {
         }));
         setActiveChannel((prev) => prev?.id === channelId ? null : prev);
       }
+      setServers((prev) => prev.map((s) => s.id === serverId
+        ? { ...s, channels: (s.channels || []).filter((c) => c.id !== channelId) }
+        : s));
     });
 
     socket.on(SOCKET_EVENTS.INVITE_RECEIVED, () => {
@@ -301,8 +334,10 @@ export function ServerProvider({ children }) {
       socket.off(SOCKET_EVENTS.SERVER_DELETED);
       socket.off(SOCKET_EVENTS.MEMBER_JOINED);
       socket.off(SOCKET_EVENTS.MEMBER_LEFT);
+      socket.off(SOCKET_EVENTS.MEMBER_KICKED);
       socket.off(SOCKET_EVENTS.MEMBER_UPDATED);
       socket.off(SOCKET_EVENTS.CHANNEL_CREATED);
+      socket.off(SOCKET_EVENTS.CHANNEL_UPDATED);
       socket.off(SOCKET_EVENTS.CHANNEL_DELETED);
       socket.off(SOCKET_EVENTS.INVITE_RECEIVED);
     };
@@ -347,7 +382,7 @@ export function ServerProvider({ children }) {
 
       setServers((prev) => {
         const next = [...prev, newServer];
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -390,7 +425,7 @@ export function ServerProvider({ children }) {
             icon: serverData.icon !== undefined ? serverData.icon : s.icon
           };
         });
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -432,7 +467,7 @@ export function ServerProvider({ children }) {
 
       setServers((prev) => {
         const next = prev.map((s) => s.id === serverId ? { ...s, channels: [...(s.channels || []), newCh] } : s);
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
         return next;
       });
 
@@ -448,7 +483,7 @@ export function ServerProvider({ children }) {
       console.warn('Backend API deleteServer not reachable, removing space:', apiErr);
       setServers((prev) => {
         const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
         return next;
       });
       setActiveServer(null);
@@ -464,7 +499,7 @@ export function ServerProvider({ children }) {
       console.warn('Backend API leaveServer not reachable, removing space:', apiErr);
       setServers((prev) => {
         const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
         return next;
       });
       setActiveServer(null);
@@ -579,7 +614,7 @@ export function ServerProvider({ children }) {
         setServers((prev) => {
           const filtered = prev.filter((s) => s.id !== joinedServer.id);
           const next = [...filtered, joinedServer];
-          try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+          try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
           return next;
         });
 
@@ -597,7 +632,7 @@ export function ServerProvider({ children }) {
       }
 
       // Check local storage for invite code
-      const localServers = JSON.parse(localStorage.getItem(getStorageKey()) || '[]');
+      const localServers = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
       const matching = localServers.find((s) => s.inviteCodes?.includes(cleanCode) || s.id === cleanCode);
       
       if (matching) {
@@ -641,7 +676,7 @@ export function ServerProvider({ children }) {
             setServers((prev) => {
               const filtered = prev.filter((s) => s.id !== joinedServer.id);
               const next = [...filtered, joinedServer];
-              try { localStorage.setItem(getStorageKey(), JSON.stringify(next)); } catch (e) {}
+              try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
               return next;
             });
             setActiveServer(joinedServer);

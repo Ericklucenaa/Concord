@@ -69,18 +69,18 @@ export default function ChannelSidebar() {
           Selecione ou crie um servidor à esquerda para começar a conversar.
         </div>
 
-        {/* User Footer Bar */}
+        {/* User Footer Bar (always available, even with no server yet) */}
         <footer className="user-footer-bar">
-          <div 
+          <div
             className="user-profile-summary"
             onClick={() => openModal('settings')}
             title="Abrir Configurações do Usuário"
           >
             <div className="avatar-wrapper">
-              <img 
-                src={user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username}`} 
-                alt={user?.username} 
-                className="avatar-img" 
+              <img
+                src={user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username}`}
+                alt={user?.username}
+                className="avatar-img"
               />
               <div className={`status-dot ${user?.status || 'online'}`} />
             </div>
@@ -91,21 +91,21 @@ export default function ChannelSidebar() {
           </div>
 
           <div className="user-controls">
-            <button 
+            <button
               className={`icon-btn ${isMuted ? 'active' : ''}`}
               onClick={toggleMute}
               title={isMuted ? 'Desmutar' : 'Mutar'}
             >
               {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
             </button>
-            <button 
+            <button
               className={`icon-btn ${isDeafened ? 'active' : ''}`}
               onClick={toggleDeafen}
               title={isDeafened ? 'Desensurdecer' : 'Ensurdecer'}
             >
               <Headphones size={18} />
             </button>
-            <button 
+            <button
               className="icon-btn"
               onClick={() => openModal('settings')}
               title="Configurações"
@@ -409,7 +409,7 @@ export default function ChannelSidebar() {
                               <span style={{ fontSize: 9, backgroundColor: 'var(--accent-danger)', padding: '1px 4px', borderRadius: 3, color: '#fff', fontWeight: 800 }}>LIVE</span>
                             )}
                             {muted && <MicOff size={13} style={{ color: 'var(--accent-danger)' }} title="Mutado" />}
-                            {deafened && <Headphones size={13} style={{ color: 'var(--accent-danger)' }} title="Ensurdecido" />}
+                            {u.isDeafened && <Headphones size={13} style={{ color: 'var(--accent-danger)' }} title="Ensurdecido" />}
                           </div>
                         </div>
                       );

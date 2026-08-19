@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../db/database.js';
-import { INVITE_STATUS, ROLES } from '../../../shared/constants.js';
+import { INVITE_STATUS, ROLES, SOCKET_EVENTS } from '../../../shared/constants.js';
+import { emitToUser, emitToServer, joinUserToServerRoom } from '../socket/ioRegistry.js';
 
 function generateRandomCode(length = 8) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -70,6 +71,12 @@ export async function createInvite(req, res) {
       createdAt: new Date().toISOString()
     };
 
+    // Notify the receiver in real time so it shows up instantly in their invite inbox,
+    // instead of only appearing after they manually reopen the app.
+    if (receiverUser) {
+      emitToUser(receiverUser.id, SOCKET_EVENTS.INVITE_RECEIVED, invite);
+    }
+
     return res.status(201).json({
       message: receiverUser ? `Convite enviado para @${receiverUser.username}!` : 'Código de convite gerado com sucesso!',
       invite
@@ -115,6 +122,17 @@ export async function joinByCode(req, res) {
       'INSERT INTO server_members (server_id, user_id, role) VALUES (?, ?, ?)',
       [invite.server_id, userId, ROLES.MEMBER]
     );
+
+    const newMember = await db.get(
+      'SELECT id, username, avatar, status FROM users WHERE id = ?',
+      [userId]
+    );
+
+    joinUserToServerRoom(userId, invite.server_id);
+    emitToServer(invite.server_id, SOCKET_EVENTS.MEMBER_JOINED, {
+      serverId: invite.server_id,
+      member: { ...newMember, role: ROLES.MEMBER }
+    });
 
     return res.json({
       message: `Você entrou no servidor ${server.name}!`,
