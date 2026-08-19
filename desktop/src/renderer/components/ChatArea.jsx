@@ -25,10 +25,12 @@ import {
 } from '../services/cloudSync';
 import EmojiPickerPopover from './EmojiPickerPopover';
 import ImageLightboxModal from './ImageLightboxModal';
+import { useNotification } from '../context/NotificationContext';
 
 const QUICK_REACTIONS = ['❤️', '😂', '🔥', '👍', '🎉'];
 
 export default function ChatArea({ onToggleMemberList }) {
+  const { showSuccess, showError, showToast } = useNotification();
   const { activeServer, activeChannel, joinByCode } = useServer();
   const { user } = useAuth();
   const { socket } = useSocket();
@@ -146,7 +148,7 @@ export default function ChatArea({ onToggleMemberList }) {
   // Process image file and compress
   const handleImageFile = (file) => {
     if (!file || !file.type.startsWith('image/')) {
-      alert('Por favor selecione um arquivo de imagem válido (PNG, JPG, GIF, WEBP).');
+      showError('Arquivo Inválido', 'Por favor selecione um arquivo de imagem válido (PNG, JPG, GIF, WEBP).');
       return;
     }
 
@@ -350,9 +352,9 @@ export default function ChatArea({ onToggleMemberList }) {
               onClick={async () => {
                 try {
                   const res = await joinByCode(inviteCode);
-                  alert(res.message || 'Você entrou no servidor com sucesso!');
+                  showSuccess('Servidor Acessado!', res.message || 'Você entrou no servidor com sucesso!');
                 } catch (err) {
-                  alert(err.message || 'Erro ao entrar no servidor.');
+                  showError('Não foi possível entrar', err.message || 'Erro ao entrar no servidor com este convite.');
                 }
               }}
             >

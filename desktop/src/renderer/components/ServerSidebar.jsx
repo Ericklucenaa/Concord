@@ -13,8 +13,10 @@ import {
   FolderPlus 
 } from 'lucide-react';
 import { ROLES } from '@shared/constants';
+import { useNotification } from '../context/NotificationContext';
 
 export default function ServerSidebar() {
+  const { showConfirm } = useNotification();
   const { 
     servers, 
     activeServer, 
@@ -52,13 +54,23 @@ export default function ServerSidebar() {
   const isOwner = (server) => server?.ownerId === user?.id || server?.role === ROLES.OWNER || server?.role === 'owner';
 
   const handleDeleteServer = async (server) => {
-    if (confirm(`Deseja realmente excluir o servidor "${server.name}"? Esta ação não pode ser desfeita.`)) {
+    const confirmed = await showConfirm(
+      'Excluir Servidor',
+      `Deseja realmente excluir o servidor "${server.name}"? Esta ação não pode ser desfeita e removerá todos os canais e membros.`,
+      { isDanger: true, confirmText: 'Excluir Servidor' }
+    );
+    if (confirmed) {
       await deleteServer(server.id);
     }
   };
 
   const handleLeaveServer = async (server) => {
-    if (confirm(`Deseja sair do servidor "${server.name}"?`)) {
+    const confirmed = await showConfirm(
+      'Sair do Servidor',
+      `Deseja sair do servidor "${server.name}"?`,
+      { isDanger: true, confirmText: 'Sair do Servidor' }
+    );
+    if (confirmed) {
       await leaveServer(server.id);
     }
   };

@@ -230,6 +230,7 @@ export default function VoiceRoomArea() {
           const isMe = u.userId === user?.id;
           const speaking = isMe ? isSpeaking : u.isSpeaking;
           const muted = isMe ? isMuted : u.isMuted;
+          const deafened = isMe ? isDeafened : u.isDeafened;
 
           return (
             <div 
@@ -241,10 +242,11 @@ export default function VoiceRoomArea() {
                 alt="" 
                 className="avatar" 
               />
-              <span className="name">{u.username} {isMe ? '(Você)' : ''}</span>
+              <span className="name">{u.username}</span>
 
-              <div className="voice-card-status">
-                {muted && <MicOff size={14} style={{ color: 'var(--accent-danger)' }} />}
+              <div className="voice-card-status" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                {muted && <MicOff size={14} style={{ color: 'var(--accent-danger)' }} title="Microfone Desativado" />}
+                {deafened && <Headphones size={14} style={{ color: 'var(--accent-danger)' }} title="Áudio Desativado" />}
                 {u.isScreenSharing && (
                   <span style={{ fontSize: 9, backgroundColor: 'var(--accent-danger)', color: '#fff', padding: '1px 4px', borderRadius: 3, fontWeight: 800 }}>LIVE</span>
                 )}

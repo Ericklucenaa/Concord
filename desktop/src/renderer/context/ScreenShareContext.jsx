@@ -9,10 +9,12 @@ import {
   listenToScreenSignalsInCloud 
 } from '../services/cloudSync';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
+import { useNotification } from './NotificationContext';
 
 const ScreenShareContext = createContext(null);
 
 export function ScreenShareProvider({ children }) {
+  const { showError, showToast } = useNotification();
   const { socket } = useSocket();
   const { user } = useAuth();
   const { activeServer, activeChannel, setActiveChannel } = useServer();
@@ -108,7 +110,7 @@ export function ScreenShareProvider({ children }) {
     }
 
     if (!currentVoice) {
-      alert('Clique em um canal de voz na barra lateral para conectar o áudio e a transmissão.');
+      showError('Canal de Voz Necessário', 'Clique em um canal de voz na barra lateral para conectar o áudio e a transmissão.');
       return;
     }
 
@@ -172,6 +174,7 @@ export function ScreenShareProvider({ children }) {
 
       // Notify Firestore cloud in real-time
       updateVoiceScreenSharingInCloud(currentVoice.id, user?.id, true, presenterData);
+      showToast('Transmissão de tela iniciada com sucesso!', 'success');
 
       // Handle user stopping screen share via native browser/OS banner
       if (stream.getVideoTracks().length > 0) {
@@ -199,7 +202,7 @@ export function ScreenShareProvider({ children }) {
         return; // User canceled the screen selection prompt
       }
       console.error('Error starting screen share:', err);
-      alert('Não foi possível iniciar a transmissão de tela.');
+      showError('Erro na Transmissão', 'Não foi possível iniciar o compartilhamento de tela.');
     }
   };
 

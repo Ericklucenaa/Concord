@@ -2,7 +2,10 @@ import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
 import { X, Check, Trash2, Mail, Users } from 'lucide-react';
 
+import { useNotification } from '../../context/NotificationContext';
+
 export default function PendingInvitesModal() {
+  const { showSuccess, showError } = useNotification();
   const { 
     modalState, 
     closeModal, 
@@ -18,8 +21,9 @@ export default function PendingInvitesModal() {
       setProcessingId(inviteId);
       await respondInvite(inviteId, action);
       closeModal('pendingInvites');
+      showSuccess('Convite Processado', action === 'accept' ? 'Você entrou no servidor com sucesso!' : 'Convite recusado.');
     } catch (err) {
-      alert(err.message || 'Erro ao processar convite.');
+      showError('Erro no Convite', err.message || 'Erro ao processar convite.');
     } finally {
       setProcessingId(null);
     }

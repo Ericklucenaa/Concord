@@ -4,6 +4,7 @@ import { SocketProvider } from './context/SocketContext';
 import { ServerProvider, useServer } from './context/ServerContext';
 import { VoiceProvider, useVoice } from './context/VoiceContext';
 import { ScreenShareProvider } from './context/ScreenShareContext';
+import { NotificationProvider } from './context/NotificationContext';
 
 import TitleBar from './components/TitleBar';
 import ServerSidebar from './components/ServerSidebar';
@@ -124,19 +125,21 @@ function MainAppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <SocketProvider>
-        <ServerProvider>
-          <VoiceProvider>
-            <ScreenShareProvider>
-              <div className="app-container">
-                <TitleBar />
-                <MainAppContent />
-              </div>
-            </ScreenShareProvider>
-          </VoiceProvider>
-        </ServerProvider>
-      </SocketProvider>
-    </AuthProvider>
+    <NotificationProvider>
+      <AuthProvider>
+        <SocketProvider>
+          <ServerProvider>
+            <VoiceProvider>
+              <ScreenShareProvider>
+                <div className="app-container">
+                  <TitleBar />
+                  <MainAppContent />
+                </div>
+              </ScreenShareProvider>
+            </VoiceProvider>
+          </ServerProvider>
+        </SocketProvider>
+      </AuthProvider>
+    </NotificationProvider>
   );
 }

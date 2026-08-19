@@ -239,20 +239,34 @@ export function AuthProvider({ children }) {
   };
 
   const updateProfile = async (profileData) => {
+    const cleanUsername = profileData.username ? profileData.username.trim().replace(/^@/, '') : user?.username;
+    const updatedUser = {
+      ...user,
+      username: cleanUsername || user?.username,
+      avatar: profileData.avatar !== undefined ? profileData.avatar : user?.avatar,
+      status: profileData.status !== undefined ? profileData.status : user?.status,
+      customStatus: profileData.customStatus !== undefined ? profileData.customStatus : user?.customStatus
+    };
+
+    // 1. Update state and localStorage immediately
+    setUser(updatedUser);
+    try { localStorage.setItem('concord_cached_user', JSON.stringify(updatedUser)); } catch (e) {}
+
+    // 2. Sync to Firestore Cloud in real time
+    if (updatedUser.id) {
+      syncUserToCloud(updatedUser);
+      setUserPresenceInCloud(updatedUser.id, updatedUser.username, updatedUser.status || 'online');
+    }
+
+    // 3. Update backend API if available
     try {
       const data = await api.updateProfile(profileData);
-      if (data?.user) setUser(data.user);
-      return data;
+      if (data?.user) {
+        setUser(data.user);
+        try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
+      }
+      return { user: data?.user || updatedUser };
     } catch (apiErr) {
-      console.warn('Backend API updateProfile not reachable, updating local profile:', apiErr);
-      const cleanUsername = profileData.username ? profileData.username.trim().replace(/^@/, '') : user?.username;
-      const updatedUser = {
-        ...user,
-        username: cleanUsername || user?.username,
-        avatar: profileData.avatar !== undefined ? profileData.avatar : user?.avatar,
-        status: profileData.status !== undefined ? profileData.status : user?.status
-      };
-      setUser(updatedUser);
       return { user: updatedUser };
     }
   };

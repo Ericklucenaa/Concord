@@ -389,6 +389,33 @@ export async function updateVoiceScreenSharingInCloud(channelId, userId, isScree
   } catch (err) {}
 }
 
+export async function updateVoiceUserStateInCloud(channelId, userId, { isMuted, isDeafened, isSpeaking, username, avatar } = {}) {
+  if (!channelId || !userId) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    if (snap && snap.exists()) {
+      let users = snap.data().users || [];
+      users = users.map((u) => {
+        if (String(u.userId) === String(userId) || (username && u.username === username)) {
+          return {
+            ...u,
+            ...(isMuted !== undefined ? { isMuted: Boolean(isMuted) } : {}),
+            ...(isDeafened !== undefined ? { isDeafened: Boolean(isDeafened) } : {}),
+            ...(isSpeaking !== undefined ? { isSpeaking: Boolean(isSpeaking) } : {}),
+            ...(username ? { username } : {}),
+            ...(avatar ? { avatar } : {})
+          };
+        }
+        return u;
+      });
+      const activePresenter = snap.data().activePresenter || null;
+      await setDoc(roomRef, { users, updatedAt: new Date().toISOString() }, { merge: true });
+      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users, activePresenter } }));
+    }
+  } catch (err) {}
+}
+
 export async function switchVoiceRoomInCloud(newChannelId, userInfo, allServerVoiceChannelIds = []) {
   if (!userInfo) return;
   for (const otherChId of allServerVoiceChannelIds) {

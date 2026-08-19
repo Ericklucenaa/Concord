@@ -8,8 +8,10 @@ import { listenToUserPresenceInCloud } from '../services/cloudSync';
 import { api } from '../services/api';
 import { ROLES, USER_STATUS } from '@shared/constants';
 import { Shield, ShieldAlert, MoreVertical, MicOff, UserX, UserCheck, Radio, Tv } from 'lucide-react';
+import { useNotification } from '../context/NotificationContext';
 
 export default function MemberListSidebar() {
+  const { showConfirm } = useNotification();
   const { activeServer, serverMembers, refreshServerDetails } = useServer();
   const { user } = useAuth();
   const { userStatuses } = useSocket();
@@ -93,7 +95,12 @@ export default function MemberListSidebar() {
   };
 
   const handleKick = async (targetMember) => {
-    if (!confirm(`Tem certeza que deseja remover ${targetMember.username}?`)) return;
+    const confirmed = await showConfirm(
+      'Remover Membro',
+      `Tem certeza que deseja remover @${targetMember.username} do servidor?`,
+      { isDanger: true, confirmText: 'Remover Membro' }
+    );
+    if (!confirmed) return;
     try {
       await api.kickMember(activeServer.id, targetMember.id);
       refreshServerDetails(activeServer.id);

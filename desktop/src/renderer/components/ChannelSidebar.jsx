@@ -26,8 +26,10 @@ import {
 } from 'lucide-react';
 import { CHANNEL_TYPES, ROLES, USER_STATUS } from '@shared/constants';
 import SoundboardModal from './SoundboardModal';
+import { useNotification } from '../context/NotificationContext';
 
 export default function ChannelSidebar() {
+  const { showConfirm, showSuccess, showError } = useNotification();
   const { 
     activeServer, 
     activeChannel, 
@@ -195,14 +197,18 @@ export default function ChannelSidebar() {
                 <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
               </>
             )}
-            
-            {activeServer?.ownerId === user?.id || activeServer?.role === ROLES.OWNER || activeServer?.role === 'owner' ? (
+                 {activeServer?.ownerId === user?.id || activeServer?.role === ROLES.OWNER || activeServer?.role === 'owner' ? (
               <button 
                 className="dropdown-item btn-secondary" 
                 style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
-                onClick={() => { 
+                onClick={async () => { 
                   setIsMenuOpen(false); 
-                  if (confirm(`Deseja realmente excluir o servidor "${activeServer.name}"?`)) {
+                  const confirmed = await showConfirm(
+                    'Excluir Servidor', 
+                    `Deseja realmente excluir permanentemente o servidor "${activeServer.name}"? Todos os canais e mensagens serão apagados.`,
+                    { isDanger: true, confirmText: 'Excluir Servidor' }
+                  );
+                  if (confirmed) {
                     deleteServer(activeServer.id);
                   }
                 }}
@@ -214,9 +220,14 @@ export default function ChannelSidebar() {
               <button 
                 className="dropdown-item btn-secondary" 
                 style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
-                onClick={() => { 
+                onClick={async () => { 
                   setIsMenuOpen(false); 
-                  if (confirm(`Deseja sair do servidor "${activeServer.name}"?`)) {
+                  const confirmed = await showConfirm(
+                    'Sair do Servidor', 
+                    `Deseja sair do servidor "${activeServer.name}"? Você precisará de um convite para entrar novamente.`,
+                    { isDanger: true, confirmText: 'Sair do Servidor' }
+                  );
+                  if (confirmed) {
                     leaveServer(activeServer.id);
                   }
                 }}
@@ -239,7 +250,7 @@ export default function ChannelSidebar() {
       </div>
 
       {/* Channels List */}
-      <div className="channel-list">
+      <div className="channels-list">
         {/* Text Channels Category */}
         <div className="channel-category">
           <div className="channel-category-header">
@@ -258,8 +269,8 @@ export default function ChannelSidebar() {
           {textChannels.map((channel) => {
             const isActive = activeChannel?.id === channel.id;
             return (
-              <div
-                key={channel.id}
+              <div 
+                key={channel.id} 
                 className={`channel-item ${isActive ? 'active' : ''}`}
                 onClick={() => setActiveChannel(channel)}
                 style={{ justifyContent: 'space-between' }}
@@ -270,6 +281,7 @@ export default function ChannelSidebar() {
                     {channel.name}
                   </span>
                 </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <button 
                     className="icon-btn" 
@@ -287,9 +299,14 @@ export default function ChannelSidebar() {
                       className="icon-btn hover-danger" 
                       style={{ padding: 2, opacity: 0.6 }}
                       title="Excluir Canal de Texto"
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        if (confirm(`Tem certeza que deseja excluir o canal de texto #${channel.name}?`)) {
+                        const confirmed = await showConfirm(
+                          'Excluir Canal de Texto', 
+                          `Tem certeza que deseja excluir o canal de texto #${channel.name}?`,
+                          { isDanger: true, confirmText: 'Excluir Canal' }
+                        );
+                        if (confirmed) {
                           deleteChannel(activeServer.id, channel.id);
                         }
                       }}
@@ -378,9 +395,14 @@ export default function ChannelSidebar() {
                         className="icon-btn hover-danger" 
                         style={{ padding: 2, opacity: 0.6 }}
                         title="Excluir Canal de Voz"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          if (confirm(`Tem certeza que deseja excluir o canal de voz "${channel.name}"?`)) {
+                          const confirmed = await showConfirm(
+                            'Excluir Canal de Voz',
+                            `Tem certeza que deseja excluir o canal de voz "${channel.name}"?`,
+                            { isDanger: true, confirmText: 'Excluir Canal' }
+                          );
+                          if (confirmed) {
                             deleteChannel(activeServer.id, channel.id);
                           }
                         }}
@@ -451,7 +473,7 @@ export default function ChannelSidebar() {
                               overflow: 'hidden',
                               textOverflow: 'ellipsis'
                             }}>
-                              {u.username} {isMe ? '(Você)' : ''}
+                              {u.username}
                             </span>
                           </div>
 
@@ -483,8 +505,8 @@ export default function ChannelSidebar() {
                                 AO VIVO
                               </span>
                             )}
-                            {muted && <MicOff size={13} style={{ color: 'var(--accent-danger)' }} title="Mutado" />}
-                            {u.isDeafened && <Headphones size={13} style={{ color: 'var(--accent-danger)' }} title="Ensurdecido" />}
+                            {muted && <MicOff size={13} style={{ color: 'var(--accent-danger)' }} title="Microfone Mutado" />}
+                            {deafened && <Headphones size={13} style={{ color: 'var(--accent-danger)' }} title="Áudio Desativado" />}
                           </div>
                         </div>
                       );

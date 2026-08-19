@@ -3,13 +3,21 @@ import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
 import { api } from '../services/api';
-import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
-import { joinVoiceInCloud, leaveVoiceInCloud, switchVoiceRoomInCloud, listenToVoiceRoomInCloud, listenToSoundboardInCloud } from '../services/cloudSync';
+import { 
+  joinVoiceInCloud, 
+  leaveVoiceInCloud, 
+  switchVoiceRoomInCloud, 
+  listenToVoiceRoomInCloud, 
+  listenToSoundboardInCloud,
+  updateVoiceUserStateInCloud 
+} from '../services/cloudSync';
 import { soundSynthesizer } from '../services/soundEffects';
+import { useNotification } from './NotificationContext';
 
 const VoiceContext = createContext(null);
 
 export function VoiceProvider({ children }) {
+  const { showError, showToast } = useNotification();
   const { socket } = useSocket();
   const { user } = useAuth();
   const { activeServer, serverMembers } = useServer();
@@ -275,7 +283,7 @@ export function VoiceProvider({ children }) {
         socket.emit(SOCKET_EVENTS.VOICE_JOIN, { channelId: channel.id });
       } catch (err) {
         console.error('Failed to capture audio stream for voice:', err);
-        alert('Não foi possível acessar seu microfone. Verifique as permissões de áudio.');
+        showError('Microfone Inacessível', 'Não foi possível acessar seu microfone. Verifique as permissões de áudio do seu navegador.');
       }
     } else {
       // Offline / Firebase Firestore mode fallback
@@ -320,7 +328,7 @@ export function VoiceProvider({ children }) {
     // Check if muted by admin
     const myMember = serverMembers.find((m) => m.id === user?.id);
     if (myMember?.mutedByAdmin) {
-      alert('Você foi silenciado por um administrador e não pode desmutar no momento.');
+      console.warn('Silenciado pelo administrador.');
       return;
     }
 
@@ -336,6 +344,14 @@ export function VoiceProvider({ children }) {
           channelId: activeVoiceChannel.id,
           isMuted: next,
           isDeafened
+        });
+      }
+      if (activeVoiceChannel?.id && user?.id) {
+        updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
+          isMuted: next,
+          isDeafened,
+          username: user.username,
+          avatar: user.avatar
         });
       }
       return next;
@@ -362,11 +378,21 @@ export function VoiceProvider({ children }) {
         audioEl.volume = next ? 0 : vol;
       });
 
+      const effectiveMute = next ? true : isMuted;
+
       if (socket && activeVoiceChannel) {
         socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
           channelId: activeVoiceChannel.id,
-          isMuted: next ? true : isMuted,
+          isMuted: effectiveMute,
           isDeafened: next
+        });
+      }
+      if (activeVoiceChannel?.id && user?.id) {
+        updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
+          isMuted: effectiveMute,
+          isDeafened: next,
+          username: user.username,
+          avatar: user.avatar
         });
       }
       return next;

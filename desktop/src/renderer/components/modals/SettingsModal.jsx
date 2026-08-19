@@ -21,10 +21,12 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { USER_STATUS } from '@shared/constants';
+import { useNotification } from '../../context/NotificationContext';
 
 export default function SettingsModal() {
   const { modalState, closeModal } = useServer();
   const { user, updateProfile, logout } = useAuth();
+  const { showSuccess, showError, showToast } = useNotification();
   const { 
     inputDevices, 
     outputDevices, 
@@ -235,9 +237,11 @@ export default function SettingsModal() {
       setSaveSuccess(true);
       setCurrentPassword('');
       setNewPassword('');
-      setTimeout(() => setSaveSuccess(false), 3000);
+      showToast(`Perfil atualizado com sucesso! Apelido: @${cleanUser}`, 'success');
+      showSuccess('Perfil Atualizado com Sucesso!', `Seu apelido agora é @${cleanUser} e já está sincronizado em tempo real para todos os servidores e amigos sem precisar recarregar a tela.`);
     } catch (err) {
       setError(err.message || 'Erro ao salvar perfil.');
+      showError('Não foi possível salvar', err.message || 'Erro ao atualizar dados do perfil.');
     } finally {
       setIsSaving(false);
     }

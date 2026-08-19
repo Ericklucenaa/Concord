@@ -13,15 +13,11 @@ import {
   Shield 
 } from 'lucide-react';
 import { ROLES } from '@shared/constants';
+import { useNotification } from '../../context/NotificationContext';
 
 export default function ServerSettingsModal() {
-  const { 
-    activeServer, 
-    modalState, 
-    closeModal, 
-    updateServer, 
-    deleteServer 
-  } = useServer();
+  const { modalState, closeModal, activeServer, updateServer, deleteServer } = useServer();
+  const { showConfirm, showSuccess, showError } = useNotification();
   const { user } = useAuth();
 
   const [name, setName] = useState('');
@@ -101,16 +97,21 @@ export default function ServerSettingsModal() {
   };
 
   const handleDelete = async () => {
-    if (!confirm(`Tem certeza absoluta que deseja excluir o servidor "${activeServer.name}"? Esta ação não pode ser desfeita.`)) {
-      return;
-    }
+    const confirmed = await showConfirm(
+      'Excluir Servidor Permanentemente',
+      `Tem certeza absoluta que deseja excluir o servidor "${activeServer.name}"? Esta ação não pode ser desfeita e removerá todos os canais, mensagens e membros.`,
+      { isDanger: true, confirmText: 'Excluir Servidor' }
+    );
+    if (!confirmed) return;
 
     try {
       setIsSaving(true);
       await deleteServer(activeServer.id);
       closeModal('serverSettings');
+      showSuccess('Servidor Excluído', `O servidor "${activeServer.name}" foi excluído com sucesso.`);
     } catch (err) {
       setError(err.message || 'Erro ao excluir servidor.');
+      showError('Erro ao Excluir', err.message || 'Não foi possível excluir o servidor.');
       setIsSaving(false);
     }
   };
