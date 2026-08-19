@@ -1,9 +1,9 @@
 {
-  "version": "1.0.4",
-  "name": "Concord v1.0.4",
+  "version": "1.0.5",
+  "name": "Concord v1.0.5",
   "releaseDate": "2026-08-19",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/latest",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.5/Concord.Setup.1.0.5.exe",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Correção completa no subsistema de áudio: sincronização de mute/unmute instantâneo em tempo real, integridade de faixas WebRTC e isolamento de ensurdecimento (deafen).",
+  "releaseNotes": "Geração automatizada de instalador executável único e limpeza de versões antigas.",
   "isMandatory": false
 }
