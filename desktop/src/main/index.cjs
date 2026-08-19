@@ -95,6 +95,60 @@ ipcMain.handle('desktop:get-sources', async () => {
   }
 });
 
+// Native Google OAuth for Desktop Electron App
+ipcMain.handle('auth:google-login', () => {
+  return new Promise((resolve, reject) => {
+    const authWindow = new BrowserWindow({
+      width: 520,
+      height: 680,
+      parent: mainWindow,
+      modal: true,
+      autoHideMenuBar: true,
+      title: 'Concord - Login com o Google',
+      backgroundColor: '#0f1117',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    const targetUrl = 'https://concord-3af70.web.app/?mode=desktop_google_auth';
+    authWindow.loadURL(targetUrl);
+
+    let isCompleted = false;
+
+    const checkUrl = (url) => {
+      if (url && url.includes('google_auth_success=')) {
+        try {
+          const match = url.match(/google_auth_success=([^&#]+)/);
+          if (match && match[1]) {
+            const decoded = decodeURIComponent(match[1]);
+            const userData = JSON.parse(decoded);
+            isCompleted = true;
+            authWindow.close();
+            resolve(userData);
+          }
+        } catch (e) {
+          if (!isCompleted) {
+            isCompleted = true;
+            authWindow.close();
+            reject(e);
+          }
+        }
+      }
+    };
+
+    authWindow.webContents.on('will-navigate', (e, url) => checkUrl(url));
+    authWindow.webContents.on('did-navigate', (e, url) => checkUrl(url));
+
+    authWindow.on('closed', () => {
+      if (!isCompleted) {
+        resolve(null);
+      }
+    });
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

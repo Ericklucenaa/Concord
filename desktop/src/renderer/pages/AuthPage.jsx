@@ -59,6 +59,32 @@ export default function AuthPage() {
     }
   };
 
+  const [isBridgeMode, setIsBridgeMode] = useState(false);
+
+  // Handle Electron Desktop Google OAuth Bridge
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isBridge = window.location.search.includes('mode=desktop_google_auth');
+    if (isBridge) {
+      setIsBridgeMode(true);
+      const runBridge = async () => {
+        try {
+          setIsLoading(true);
+          const googleUser = await signInWithGoogle();
+          if (googleUser) {
+            const encoded = encodeURIComponent(JSON.stringify(googleUser));
+            window.location.href = `https://concord-3af70.web.app/?google_auth_success=${encoded}`;
+          }
+        } catch (err) {
+          setError(err.message || 'Erro ao autenticar com o Google.');
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      runBridge();
+    }
+  }, []);
+
   const handleGoogleSignIn = async () => {
     try {
       setIsLoading(true);

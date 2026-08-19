@@ -11,5 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeWindow: () => ipcRenderer.invoke('window:close'),
 
   // Screen Share Native Sources
-  getDesktopSources: () => ipcRenderer.invoke('desktop:get-sources')
+  getDesktopSources: () => ipcRenderer.invoke('desktop:get-sources'),
+
+  // Native Google OAuth for Desktop App
+  signInWithGoogleNative: () => ipcRenderer.invoke('auth:google-login')
 });

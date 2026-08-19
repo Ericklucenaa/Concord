@@ -49,6 +49,11 @@ googleProvider.setCustomParameters({
 const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI);
 
 export async function signInWithGoogle() {
+  if (typeof window !== 'undefined' && window.electronAPI?.signInWithGoogleNative) {
+    const electronUser = await window.electronAPI.signInWithGoogleNative();
+    return electronUser;
+  }
+
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return {
