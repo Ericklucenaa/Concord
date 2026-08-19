@@ -24,6 +24,7 @@ export default function VoiceRoomArea() {
     voiceUsers, 
     isSpeaking, 
     isMuted,
+    isDeafened,
     setUserVolume 
   } = useVoice();
   const { 
