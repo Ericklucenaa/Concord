@@ -1,6 +1,7 @@
 import { db } from '../db/database.js';
-import { ROLES } from '../../../shared/constants.js';
+import { ROLES, SOCKET_EVENTS } from '../../../shared/constants.js';
 import { getServerMember } from '../middleware/permissions.js';
+import { getIO } from '../socket/ioRegistry.js';
 
 export async function getChannelMessages(req, res) {
   try {
@@ -61,6 +62,16 @@ export async function deleteMessage(req, res) {
     }
 
     await db.run('DELETE FROM messages WHERE id = ?', [messageId]);
+
+    // Notify everyone currently viewing this channel so the message
+    // disappears live for them too, not just for whoever clicked delete.
+    const io = getIO();
+    if (io) {
+      io.to(`channel:${message.channel_id}`).emit(SOCKET_EVENTS.MESSAGE_DELETE, {
+        messageId,
+        channelId: message.channel_id
+      });
+    }
 
     return res.json({ message: 'Mensagem excluída com sucesso!', messageId });
   } catch (err) {

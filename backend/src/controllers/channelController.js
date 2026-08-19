@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../db/database.js';
-import { CHANNEL_TYPES, ROLES } from '../../../shared/constants.js';
+import { CHANNEL_TYPES, ROLES, SOCKET_EVENTS } from '../../../shared/constants.js';
+import { emitToServer } from '../socket/ioRegistry.js';
 
 export async function createChannel(req, res) {
   try {
@@ -30,6 +31,8 @@ export async function createChannel(req, res) {
       isPrivate: Boolean(isPrivate),
       createdAt: new Date().toISOString()
     };
+
+    emitToServer(serverId, SOCKET_EVENTS.CHANNEL_CREATED, { serverId, channel });
 
     return res.status(201).json({
       message: 'Canal criado com sucesso!',
@@ -62,15 +65,19 @@ export async function updateChannel(req, res) {
       [updatedName, updatedPrivate, channelId]
     );
 
+    const updatedChannel = {
+      id: channelId,
+      serverId: channel.server_id,
+      name: updatedName,
+      type: channel.type,
+      isPrivate: Boolean(updatedPrivate)
+    };
+
+    emitToServer(channel.server_id, SOCKET_EVENTS.CHANNEL_UPDATED, { serverId: channel.server_id, channel: updatedChannel });
+
     return res.json({
       message: 'Canal atualizado com sucesso!',
-      channel: {
-        id: channelId,
-        serverId: channel.server_id,
-        name: updatedName,
-        type: channel.type,
-        isPrivate: Boolean(updatedPrivate)
-      }
+      channel: updatedChannel
     });
   } catch (err) {
     console.error('Update channel error:', err);
@@ -88,6 +95,8 @@ export async function deleteChannel(req, res) {
     }
 
     await db.run('DELETE FROM channels WHERE id = ?', [channelId]);
+
+    emitToServer(channel.server_id, SOCKET_EVENTS.CHANNEL_DELETED, { serverId: channel.server_id, channelId });
 
     return res.json({ message: 'Canal excluído com sucesso!' });
   } catch (err) {

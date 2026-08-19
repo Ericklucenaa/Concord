@@ -47,6 +47,9 @@ export const SOCKET_EVENTS = {
   MEMBER_UPDATED: 'member:updated',
   MEMBER_KICKED: 'member:kicked',
   MEMBER_MUTED: 'member:muted',
+  CHANNEL_CREATED: 'channel:created',
+  CHANNEL_DELETED: 'channel:deleted',
+  CHANNEL_UPDATED: 'channel:updated',
 
   // Chat
   CHANNEL_JOIN: 'channel:join',

@@ -69,6 +69,12 @@ export default function ChatArea({ onToggleMemberList }) {
       }
     };
 
+    const handleMessageDelete = ({ messageId, channelId }) => {
+      if (channelId === activeChannel?.id) {
+        setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      }
+    };
+
     const handleTyping = ({ channelId, userId: typingUserId, username: typingUsername, isTyping }) => {
       if (channelId === activeChannel?.id && typingUserId !== user?.id) {
         setTypingUsers((prev) => {
@@ -84,10 +90,12 @@ export default function ChatArea({ onToggleMemberList }) {
     };
 
     socket.on(SOCKET_EVENTS.MESSAGE_NEW, handleNewMessage);
+    socket.on(SOCKET_EVENTS.MESSAGE_DELETE, handleMessageDelete);
     socket.on(SOCKET_EVENTS.TYPING_UPDATE, handleTyping);
 
     return () => {
       socket.off(SOCKET_EVENTS.MESSAGE_NEW, handleNewMessage);
+      socket.off(SOCKET_EVENTS.MESSAGE_DELETE, handleMessageDelete);
       socket.off(SOCKET_EVENTS.TYPING_UPDATE, handleTyping);
     };
   }, [socket, activeChannel?.id, user?.id]);

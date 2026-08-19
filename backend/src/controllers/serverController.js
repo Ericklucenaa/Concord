@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { db } from '../db/database.js';
-import { ROLES, CHANNEL_TYPES } from '../../../shared/constants.js';
+import { ROLES, CHANNEL_TYPES, SOCKET_EVENTS } from '../../../shared/constants.js';
+import { emitToServer, joinUserToServerRoom, leaveUserFromServerRoom } from '../socket/ioRegistry.js';
 
 export async function createServer(req, res) {
   try {
@@ -53,6 +54,9 @@ export async function createServer(req, res) {
         { id: voiceChannelId, serverId, name: 'Sala Geral', type: CHANNEL_TYPES.VOICE, isPrivate: false }
       ]
     };
+
+    // Make sure the creator's active connections are subscribed to this server's room
+    joinUserToServerRoom(userId, serverId);
 
     return res.status(201).json({
       message: 'Servidor criado com sucesso!',
@@ -176,14 +180,18 @@ export async function updateServer(req, res) {
       [updatedName, updatedDesc, updatedIcon, serverId]
     );
 
+    const updatedServer = {
+      id: serverId,
+      name: updatedName,
+      description: updatedDesc,
+      icon: updatedIcon
+    };
+
+    emitToServer(serverId, SOCKET_EVENTS.SERVER_UPDATED, { server: updatedServer });
+
     return res.json({
       message: 'Servidor atualizado com sucesso!',
-      server: {
-        id: serverId,
-        name: updatedName,
-        description: updatedDesc,
-        icon: updatedIcon
-      }
+      server: updatedServer
     });
   } catch (err) {
     console.error('Update server error:', err);
@@ -204,6 +212,8 @@ export async function deleteServer(req, res) {
     if (server.owner_id !== userId) {
       return res.status(403).json({ error: 'Apenas o proprietário pode excluir o servidor.' });
     }
+
+    emitToServer(serverId, SOCKET_EVENTS.SERVER_DELETED, { serverId });
 
     await db.run('DELETE FROM servers WHERE id = ?', [serverId]);
 
@@ -231,6 +241,9 @@ export async function leaveServer(req, res) {
     }
 
     await db.run('DELETE FROM server_members WHERE server_id = ? AND user_id = ?', [serverId, userId]);
+
+    emitToServer(serverId, SOCKET_EVENTS.MEMBER_LEFT, { serverId, userId });
+    leaveUserFromServerRoom(userId, serverId);
 
     return res.json({ message: 'Você saiu do servidor.' });
   } catch (err) {
