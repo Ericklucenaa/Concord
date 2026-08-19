@@ -16,6 +16,7 @@
     "test:backend": "npm test --prefix backend",
     "test": "npm run test:backend",
     "build:desktop": "npm run build --prefix desktop",
+    "dist:win": "npm run dist:win --prefix desktop",
     "package:win": "npm run package:win --prefix desktop"
   },
   "keywords": [

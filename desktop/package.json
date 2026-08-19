@@ -30,8 +30,7 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "icon": "public/icon.ico"
+      ]
     },
     "nsis": {
       "oneClick": false,
