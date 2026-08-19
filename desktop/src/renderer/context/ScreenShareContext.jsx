@@ -46,9 +46,16 @@ export function ScreenShareProvider({ children }) {
       const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
       screenPeerConnectionsRef.current.set(targetUserId, pc);
 
-      // Add screen video tracks
+      // Add screen video tracks with high-bitrate encoding
       stream.getVideoTracks().forEach((track) => {
-        pc.addTrack(track, stream);
+        const sender = pc.addTrack(track, stream);
+        try {
+          const params = sender.getParameters();
+          if (!params.encodings) params.encodings = [{}];
+          params.encodings[0].maxBitrate = 8000000; // 8 Mbps for crisp HD 60fps
+          params.encodings[0].degradationPreference = 'maintain-resolution';
+          sender.setParameters(params).catch(() => {});
+        } catch (e) {}
       });
 
       pc.onicecandidate = (event) => {
@@ -117,24 +124,37 @@ export function ScreenShareProvider({ children }) {
             mandatory: {
               chromeMediaSource: 'desktop',
               chromeMediaSourceId: sourceId,
-              minWidth: 640,
+              minWidth: 1280,
               maxWidth: width,
-              minHeight: 480,
+              minHeight: 720,
               maxHeight: height,
               maxFrameRate: screenFps
             }
           }
         });
       } else {
-        // Web / Fallback display media
+        // Web / Fallback display media with crystal-clear HD & 60fps
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
-            width: { max: width },
-            height: { max: height },
-            frameRate: { max: screenFps }
+            width: { ideal: width, max: width },
+            height: { ideal: height, max: height },
+            frameRate: { ideal: screenFps, max: screenFps },
+            displaySurface: 'monitor'
           },
-          audio: true
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
         });
+      }
+
+      // Maximize video track clarity & detail
+      if (stream.getVideoTracks().length > 0) {
+        const vTrack = stream.getVideoTracks()[0];
+        if ('contentHint' in vTrack) {
+          vTrack.contentHint = 'detail';
+        }
       }
 
       localStreamRef.current = stream;
@@ -199,6 +219,13 @@ export function ScreenShareProvider({ children }) {
 
     if (activeVoiceChannel) {
       updateVoiceScreenSharingInCloud(activeVoiceChannel.id, user?.id, false, null);
+
+      // Broadcast screen_stopped signal to all other voice participants in cloud
+      for (const remoteUser of voiceUsers) {
+        if (remoteUser.userId !== user?.id) {
+          sendScreenSignalInCloud(activeVoiceChannel.id, user?.id, remoteUser.userId, 'screen_stopped', {});
+        }
+      }
     }
 
     if (socket && socket.connected && activeVoiceChannel) {
@@ -210,7 +237,7 @@ export function ScreenShareProvider({ children }) {
     // Close screen peer connections
     screenPeerConnectionsRef.current.forEach((pc) => pc.close());
     screenPeerConnectionsRef.current.clear();
-  }, [socket, activeVoiceChannel, activePresenter, user?.id]);
+  }, [socket, activeVoiceChannel, activePresenter, user?.id, voiceUsers]);
 
   const watchStream = (presenterUser, channel) => {
     if (!presenterUser) return;
@@ -234,6 +261,27 @@ export function ScreenShareProvider({ children }) {
     }
   };
 
+  // Synchronize presenter state with Firestore voice room updates
+  useEffect(() => {
+    const handleVoiceUpdate = (e) => {
+      const { channelId, activePresenter: cloudPresenter } = e.detail || {};
+      if (activeVoiceChannel && String(channelId) === String(activeVoiceChannel.id)) {
+        if (!cloudPresenter) {
+          setActivePresenter((prev) => {
+            if (prev && prev.userId !== user?.id) {
+              setRemoteScreenStreams(new Map());
+              return null;
+            }
+            return prev;
+          });
+        }
+      }
+    };
+
+    window.addEventListener('concord:voice_update', handleVoiceUpdate);
+    return () => window.removeEventListener('concord:voice_update', handleVoiceUpdate);
+  }, [activeVoiceChannel?.id, user?.id]);
+
   // Listen to Firestore WebRTC signals for pure Cloud/Hosting mode
   useEffect(() => {
     if (!user?.id) return;
@@ -246,7 +294,27 @@ export function ScreenShareProvider({ children }) {
         }
       }
 
-      // 2. If we receive an offer from presenter
+      // 2. If screen share stopped by presenter
+      if (type === 'screen_stopped') {
+        setRemoteScreenStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(fromUserId);
+          return next;
+        });
+        setActivePresenter((prev) => {
+          if (prev && String(prev.userId) === String(fromUserId)) {
+            return null;
+          }
+          return prev;
+        });
+        const pc = screenPeerConnectionsRef.current.get(fromUserId);
+        if (pc) {
+          pc.close();
+          screenPeerConnectionsRef.current.delete(fromUserId);
+        }
+      }
+
+      // 3. If we receive an offer from presenter
       if (type === 'offer') {
         try {
           const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });

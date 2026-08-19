@@ -85,8 +85,8 @@ function MainAppContent() {
     return <AuthPage />;
   }
 
-  // Display Voice Room view if currently viewing a voice channel, connected to voice, or screen sharing
-  const isVoiceView = activeChannel?.type === 'voice' || (activeVoiceChannel && activeChannel?.id === activeVoiceChannel?.id) || isScreenSharing || Boolean(activePresenter);
+  // Display Voice Room view if active channel is voice or if user is on the voice view
+  const isVoiceView = activeChannel?.type === 'voice' || (!activeChannel && (activeVoiceChannel || isScreenSharing || activePresenter));
 
   return (
     <div className="main-layout">

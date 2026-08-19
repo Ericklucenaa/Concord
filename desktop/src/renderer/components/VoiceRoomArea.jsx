@@ -11,7 +11,8 @@ import {
   Volume2, 
   VolumeX,
   Sliders,
-  Settings2
+  Settings2,
+  ExternalLink
 } from 'lucide-react';
 
 export default function VoiceRoomArea() {
@@ -70,6 +71,17 @@ export default function VoiceRoomArea() {
     }
   };
 
+  const togglePictureInPicture = async () => {
+    if (!videoRef.current) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (document.pictureInPictureEnabled) {
+        await videoRef.current.requestPictureInPicture();
+      }
+    } catch (e) {}
+  };
+
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
   const streamReady = isScreenSharing ? Boolean(localScreenStream) : (activePresenter && remoteScreenStreams.has(activePresenter.userId));
   const hasActiveStream = isScreenSharing || isViewer;
@@ -78,7 +90,7 @@ export default function VoiceRoomArea() {
     <div className="voice-stream-view" ref={containerRef}>
       {/* Stream Video Area (if sharing or watching screen) */}
       {hasActiveStream ? (
-        <div className="stream-player-container" style={{ position: 'relative', width: '100%', height: '100%', minHeight: 360, backgroundColor: '#090a0f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="stream-player-container" style={{ position: 'relative', width: '100%', height: '100%', minHeight: 380, backgroundColor: '#06070a', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
           {streamReady ? (
             <video 
               ref={videoRef} 
@@ -86,50 +98,56 @@ export default function VoiceRoomArea() {
               autoPlay 
               playsInline 
               muted={isScreenSharing}
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              style={{ 
+                width: '100%', 
+                height: '100%', 
+                objectFit: 'contain',
+                imageRendering: '-webkit-optimize-contrast',
+                borderRadius: 'var(--radius-md)'
+              }}
             />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32, textAlign: 'center' }}>
-              <Radio size={48} style={{ color: 'var(--accent-primary)', animation: 'pulse 1.5s infinite' }} />
-              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 32, textAlign: 'center' }}>
+              <Radio size={52} style={{ color: 'var(--accent-primary)', animation: 'pulse 1.5s infinite' }} />
+              <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>
                 Conectando à transmissão de {activePresenter?.username || 'apresentador'}...
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 360 }}>
-                Aguardando canal de vídeo WebRTC em tempo real ({screenQuality} @ {screenFps}fps).
+              <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 400, lineHeight: 1.5 }}>
+                Estabelecendo canal direto WebRTC P2P em alta definição ({screenQuality} @ {screenFps}fps).
               </div>
             </div>
           )}
 
-          <div className="stream-overlay-badge" style={{ position: 'absolute', top: 16, left: 16, display: 'flex', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0, 0, 0, 0.65)', padding: '6px 12px', borderRadius: 'var(--radius-full)', backdropFilter: 'blur(8px)', zIndex: 10 }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, backgroundColor: 'var(--accent-danger)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4 }}>
+          <div className="stream-overlay-badge" style={{ position: 'absolute', top: 16, left: 16, display: 'flex', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0, 0, 0, 0.7)', padding: '6px 14px', borderRadius: 'var(--radius-full)', backdropFilter: 'blur(10px)', zIndex: 10, border: '1px solid rgba(255,255,255,0.1)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, backgroundColor: 'var(--accent-danger)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.5px', boxShadow: '0 0 8px rgba(239,68,68,0.6)' }}>
               <Radio size={12} />
               AO VIVO
             </span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
               {isScreenSharing ? 'Você está transmitindo' : `${activePresenter?.username} está transmitindo`}
             </span>
-            <span style={{ opacity: 0.6, fontSize: 11, color: '#fff' }}>({screenQuality} @ {screenFps}fps)</span>
+            <span style={{ opacity: 0.7, fontSize: 11, color: '#fff', fontFamily: 'var(--font-mono)' }}>({screenQuality} @ {screenFps}fps)</span>
           </div>
 
           <div 
             style={{
               position: 'absolute',
-              bottom: 24,
-              right: 24,
+              bottom: 20,
+              right: 20,
               display: 'flex',
               gap: 8,
-              backgroundColor: 'rgba(0, 0, 0, 0.75)',
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
               padding: '6px 12px',
               borderRadius: 'var(--radius-full)',
-              backdropFilter: 'blur(8px)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
               zIndex: 10
             }}
           >
             {isScreenSharing && (
               <button 
                 className="btn btn-danger" 
-                style={{ padding: '4px 12px', fontSize: 12 }}
+                style={{ padding: '4px 12px', fontSize: 12, fontWeight: 700 }}
                 onClick={stopScreenShare}
               >
                 Parar Transmissão
@@ -146,10 +164,22 @@ export default function VoiceRoomArea() {
               </button>
             )}
 
+            {streamReady && document.pictureInPictureEnabled && (
+              <button 
+                className="icon-btn" 
+                onClick={togglePictureInPicture} 
+                title="Modo Picture-in-Picture (Janela Flutuante)"
+                style={{ padding: '6px' }}
+              >
+                <ExternalLink size={16} />
+              </button>
+            )}
+
             <button 
               className="icon-btn" 
               onClick={toggleFullscreen} 
               title={isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'}
+              style={{ padding: '6px' }}
             >
               {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             </button>
