@@ -7,7 +7,7 @@ import {
   signUpWithEmail, 
   signOutFirebase 
 } from '../services/firebase';
-import { syncUserToCloud } from '../services/cloudSync';
+import { syncUserToCloud, setUserPresenceInCloud } from '../services/cloudSync';
 
 const AuthContext = createContext(null);
 
@@ -96,10 +96,23 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       syncUserToCloud(user);
+      setUserPresenceInCloud(user.id, user.username, 'online');
+
+      const handleUnload = () => {
+        setUserPresenceInCloud(user.id, user.username, 'offline');
+      };
+
+      window.addEventListener('beforeunload', handleUnload);
+      window.addEventListener('pagehide', handleUnload);
+
+      return () => {
+        window.removeEventListener('beforeunload', handleUnload);
+        window.removeEventListener('pagehide', handleUnload);
+      };
     }
-  }, [user]);
+  }, [user?.id, user?.username]);
 
   const login = async (credentials) => {
     try {

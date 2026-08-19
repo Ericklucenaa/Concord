@@ -277,6 +277,21 @@ export default function ChannelSidebar() {
                   >
                     <UserPlus size={13} />
                   </button>
+                  {isStaff && textChannels.length > 1 && (
+                    <button 
+                      className="icon-btn hover-danger" 
+                      style={{ padding: 2, opacity: 0.6 }}
+                      title="Excluir Canal de Texto"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Tem certeza que deseja excluir o canal de texto #${channel.name}?`)) {
+                          deleteChannel(activeServer.id, channel.id);
+                        }
+                      }}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -304,14 +319,12 @@ export default function ChannelSidebar() {
               ? voiceUsers 
               : (voiceChannelUsersMap.get(channel.id) || []);
 
-            // If not connected to this channel, filter out self to avoid ghost presence
             if (!isConnectedToThis && user) {
               currentUsersInChannel = currentUsersInChannel.filter(
                 (u) => String(u.userId) !== String(user.id) && u.username?.toLowerCase() !== user.username?.toLowerCase()
               );
             }
 
-            // Deduplicate by userId and username
             const seenUsers = new Set();
             currentUsersInChannel = currentUsersInChannel.filter((u) => {
               if (!u) return false;
@@ -355,6 +368,21 @@ export default function ChannelSidebar() {
                     >
                       <UserPlus size={13} />
                     </button>
+                    {isStaff && voiceChannels.length > 1 && (
+                      <button 
+                        className="icon-btn hover-danger" 
+                        style={{ padding: 2, opacity: 0.6 }}
+                        title="Excluir Canal de Voz"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Tem certeza que deseja excluir o canal de voz "${channel.name}"?`)) {
+                            deleteChannel(activeServer.id, channel.id);
+                          }
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -375,7 +403,11 @@ export default function ChannelSidebar() {
                           className={`voice-user-pill ${speaking ? 'speaking' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : u);
+                            if (u.isScreenSharing) {
+                              watchStream(u, channel);
+                            } else {
+                              setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : u);
+                            }
                           }}
                           style={{
                             display: 'flex',
@@ -388,7 +420,7 @@ export default function ChannelSidebar() {
                             cursor: 'pointer',
                             transition: 'background-color 0.15s ease'
                           }}
-                          title={`Clique para opções de áudio e perfil de @${u.username}`}
+                          title={u.isScreenSharing ? `Transmitindo Ao Vivo - Clique para assistir` : `Clique para opções de áudio e perfil de @${u.username}`}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
                             <div style={{ position: 'relative', width: 22, height: 22, flexShrink: 0 }}>
@@ -423,7 +455,28 @@ export default function ChannelSidebar() {
                               <VolumeX size={12} style={{ color: 'var(--accent-danger)' }} title="Silenciado localmente" />
                             )}
                             {u.isScreenSharing && (
-                              <span style={{ fontSize: 9, backgroundColor: 'var(--accent-danger)', padding: '1px 4px', borderRadius: 3, color: '#fff', fontWeight: 800 }}>LIVE</span>
+                              <span 
+                                style={{ 
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 3,
+                                  fontSize: 9, 
+                                  backgroundColor: 'var(--accent-danger)', 
+                                  padding: '2px 5px', 
+                                  borderRadius: 3, 
+                                  color: '#fff', 
+                                  fontWeight: 800,
+                                  boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  watchStream(u, channel);
+                                }}
+                                title="Clique para assistir transmissão"
+                              >
+                                <Radio size={10} />
+                                AO VIVO
+                              </span>
                             )}
                             {muted && <MicOff size={13} style={{ color: 'var(--accent-danger)' }} title="Mutado" />}
                             {u.isDeafened && <Headphones size={13} style={{ color: 'var(--accent-danger)' }} title="Ensurdecido" />}
@@ -432,7 +485,6 @@ export default function ChannelSidebar() {
                       );
                     })}
 
-                    {/* Discord style "Convidar para voz" button */}
                     {isConnectedToThis && (
                       <button
                         onClick={() => openModal('invite', channel.id)}

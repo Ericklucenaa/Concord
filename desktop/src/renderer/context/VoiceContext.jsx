@@ -569,6 +569,23 @@ export function VoiceProvider({ children }) {
     };
   }, [activeServer, socket, socket?.connected, activeVoiceChannel?.id, user?.id, user?.username]);
 
+  // Clean up voice room immediately when closing the tab/window
+  useEffect(() => {
+    const handleVoiceUnload = () => {
+      if (activeVoiceChannel?.id && user?.id) {
+        leaveVoiceInCloud(activeVoiceChannel.id, user.id, user.username);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleVoiceUnload);
+    window.addEventListener('pagehide', handleVoiceUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleVoiceUnload);
+      window.removeEventListener('pagehide', handleVoiceUnload);
+    };
+  }, [activeVoiceChannel?.id, user?.id, user?.username]);
+
   return (
     <VoiceContext.Provider
       value={{

@@ -5,7 +5,7 @@ import { useSocket } from '../context/SocketContext';
 import { api } from '../services/api';
 import { Hash, Send, Trash2, Smile, Users } from 'lucide-react';
 import { SOCKET_EVENTS, ROLES } from '@shared/constants';
-import { saveMessageToCloud, listenToMessagesFromCloud } from '../services/cloudSync';
+import { saveMessageToCloud, deleteMessageFromCloud, listenToMessagesFromCloud } from '../services/cloudSync';
 
 export default function ChatArea({ onToggleMemberList }) {
   const { activeServer, activeChannel, joinByCode } = useServer();
@@ -32,44 +32,47 @@ export default function ChatArea({ onToggleMemberList }) {
     let unsubscribeCloud = null;
 
     async function loadMessages() {
-      try {
+      if (api.hasBackend()) {
+        try {
+          setIsLoadingMessages(true);
+          const data = await api.getMessages(activeChannel.id);
+          if (isMounted) {
+            setMessages(data.messages || []);
+            setTimeout(scrollToBottom, 50);
+          }
+        } catch (err) {} finally {
+          if (isMounted) setIsLoadingMessages(false);
+        }
+      } else {
+        // Cloud Firestore mode: listen in real-time
         setIsLoadingMessages(true);
-        const data = await api.getMessages(activeChannel.id);
-        if (isMounted) {
-          setMessages(data.messages || []);
-          setTimeout(scrollToBottom, 50);
-        }
-      } catch (err) {
-        if (isMounted) {
-          unsubscribeCloud = listenToMessagesFromCloud(activeChannel.id, (cloudMsgs) => {
-            if (isMounted && cloudMsgs && cloudMsgs.length > 0) {
-              setMessages(cloudMsgs);
-              setTimeout(scrollToBottom, 50);
-            }
-          });
-        }
-      } finally {
-        if (isMounted) setIsLoadingMessages(false);
+        unsubscribeCloud = listenToMessagesFromCloud(activeChannel.id, (cloudMsgs) => {
+          if (isMounted) {
+            setMessages(cloudMsgs || []);
+            setIsLoadingMessages(false);
+            setTimeout(scrollToBottom, 50);
+          }
+        });
       }
     }
 
     loadMessages();
 
     // Join channel socket room
-    if (socket) {
+    if (socket && socket.connected) {
       socket.emit(SOCKET_EVENTS.CHANNEL_JOIN, { channelId: activeChannel.id });
     }
 
     return () => {
       isMounted = false;
-      if (socket) {
+      if (socket && socket.connected) {
         socket.emit(SOCKET_EVENTS.CHANNEL_LEAVE, { channelId: activeChannel.id });
       }
       if (unsubscribeCloud) {
         unsubscribeCloud();
       }
     };
-  }, [activeChannel?.id, socket]);
+  }, [activeChannel?.id, socket, socket?.connected]);
 
   // Socket listeners for real-time messages & typing
   useEffect(() => {
@@ -134,7 +137,6 @@ export default function ChatArea({ onToggleMemberList }) {
         content: inputText.trim(),
         createdAt: new Date().toISOString()
       };
-      // Save message to Firestore (the listener will catch it and display it for all users)
       saveMessageToCloud(activeChannel.id, localMsg);
     }
 
@@ -151,12 +153,12 @@ export default function ChatArea({ onToggleMemberList }) {
   const handleInputChange = (e) => {
     setInputText(e.target.value);
 
-    if (socket && activeChannel?.id) {
+    if (socket && socket.connected && activeChannel?.id) {
       socket.emit(SOCKET_EVENTS.TYPING_START, { channelId: activeChannel.id });
 
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
-        if (socket) {
+        if (socket && socket.connected) {
           socket.emit(SOCKET_EVENTS.TYPING_STOP, { channelId: activeChannel.id });
         }
       }, 2500);
@@ -164,12 +166,13 @@ export default function ChatArea({ onToggleMemberList }) {
   };
 
   const handleDeleteMessage = async (messageId) => {
-    try {
-      await api.deleteMessage(messageId);
-      setMessages((prev) => prev.filter((m) => m.id !== messageId));
-    } catch (err) {
-      alert('Não foi possível excluir a mensagem.');
+    if (api.hasBackend()) {
+      try {
+        await api.deleteMessage(messageId);
+      } catch (err) {}
     }
+    deleteMessageFromCloud(messageId);
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
   };
 
   const isStaff = activeServer?.role === ROLES.OWNER || activeServer?.role === ROLES.ADMIN || activeServer?.role === ROLES.MODERATOR;

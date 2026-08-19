@@ -284,22 +284,30 @@ export async function saveMessageToCloud(channelId, message) {
   } catch (err) {}
 }
 
+export async function deleteMessageFromCloud(messageId) {
+  if (!messageId) return;
+  try {
+    const msgRef = doc(firestore, 'concord_messages', String(messageId));
+    await deleteDoc(msgRef);
+  } catch (err) {}
+}
+
 export function listenToMessagesFromCloud(channelId, callback) {
   if (!channelId) return () => {};
   try {
     const q = query(
       collection(firestore, 'concord_messages'),
-      where('channelId', '==', String(channelId)),
-      orderBy('createdAt', 'asc')
+      where('channelId', '==', String(channelId))
     );
     return onSnapshot(q, (snapshot) => {
       const messages = [];
       snapshot.forEach((docSnap) => {
         messages.push(docSnap.data());
       });
+      messages.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
       callback(messages);
     }, (err) => {
-      // Handled silently when offline or adblocked
+      // Handled silently
     });
   } catch (err) {
     return () => {};
@@ -323,11 +331,10 @@ export async function joinVoiceInCloud(channelId, userInfo) {
       return true;
     });
     users.push(userInfo);
-    await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
+    await setDoc(roomRef, { users, updatedAt: new Date().toISOString() }, { merge: true });
     
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
   } catch (err) {
-    // Local fallback event
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [userInfo] } }));
   }
 }
@@ -345,16 +352,41 @@ export async function leaveVoiceInCloud(channelId, userId, username) {
         if (username && u.username && u.username.toLowerCase() === username.toLowerCase()) return false;
         return true;
       });
+      let activePresenter = snap.data().activePresenter || null;
+      if (activePresenter && (String(activePresenter.userId) === String(userId) || activePresenter.username === username)) {
+        activePresenter = null;
+      }
+
       if (users.length === 0) {
         await deleteDoc(roomRef);
       } else {
-        await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
+        await setDoc(roomRef, { users, activePresenter, updatedAt: new Date().toISOString() });
       }
-      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
+      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users, activePresenter } }));
     }
   } catch (err) {
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [] } }));
   }
+}
+
+export async function updateVoiceScreenSharingInCloud(channelId, userId, isScreenSharing, presenterData = null) {
+  if (!channelId || !userId) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    if (snap && snap.exists()) {
+      let users = snap.data().users || [];
+      users = users.map((u) => {
+        if (String(u.userId) === String(userId) || (presenterData?.username && u.username === presenterData.username)) {
+          return { ...u, isScreenSharing: Boolean(isScreenSharing) };
+        }
+        return u;
+      });
+      const activePresenter = isScreenSharing ? presenterData : null;
+      await setDoc(roomRef, { users, activePresenter, updatedAt: new Date().toISOString() }, { merge: true });
+      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users, activePresenter } }));
+    }
+  } catch (err) {}
 }
 
 export async function switchVoiceRoomInCloud(newChannelId, userInfo, allServerVoiceChannelIds = []) {
@@ -375,13 +407,48 @@ export function listenToVoiceRoomInCloud(channelId, callback) {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
     return onSnapshot(roomRef, (snap) => {
       if (snap && snap.exists()) {
-        callback(snap.data().users || []);
+        const data = snap.data();
+        callback(data.users || [], data.activePresenter || null);
       } else {
-        callback([]);
+        callback([], null);
       }
     }, (err) => {
       // Handled silently
     });
+  } catch (err) {
+    return () => {};
+  }
+}
+
+export async function setUserPresenceInCloud(userId, username, status = 'online') {
+  if (!userId) return;
+  try {
+    const userDocRef = doc(firestore, 'concord_users', String(userId));
+    await setDoc(userDocRef, {
+      id: String(userId),
+      username: username || 'Usuário',
+      status: status,
+      lastSeen: new Date().toISOString()
+    }, { merge: true });
+  } catch (err) {}
+}
+
+export function listenToUserPresenceInCloud(callback) {
+  try {
+    const q = collection(firestore, 'concord_users');
+    return onSnapshot(q, (snapshot) => {
+      const statusMap = new Map();
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data && data.id) {
+          statusMap.set(String(data.id), data.status || 'offline');
+          if (data.username) {
+            statusMap.set(data.username.toLowerCase(), data.status || 'offline');
+          }
+        }
+      });
+      callback(statusMap);
+    }, (err) => {});
   } catch (err) {
     return () => {};
   }

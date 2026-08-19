@@ -1,17 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import { useVoice } from '../context/VoiceContext';
+import { useScreenShare } from '../context/ScreenShareContext';
+import { listenToUserPresenceInCloud } from '../services/cloudSync';
 import { api } from '../services/api';
 import { ROLES, USER_STATUS } from '@shared/constants';
-import { Shield, ShieldAlert, MoreVertical, MicOff, UserX, UserCheck } from 'lucide-react';
+import { Shield, ShieldAlert, MoreVertical, MicOff, UserX, UserCheck, Radio, Tv } from 'lucide-react';
 
 export default function MemberListSidebar() {
   const { activeServer, serverMembers, refreshServerDetails } = useServer();
   const { user } = useAuth();
   const { userStatuses } = useSocket();
+  const { activeVoiceChannel, voiceUsers, voiceChannelUsersMap } = useVoice();
+  const { watchStream } = useScreenShare();
 
   const [selectedMember, setSelectedMember] = useState(null);
+  const [cloudStatuses, setCloudStatuses] = useState(new Map());
+
+  useEffect(() => {
+    const unsub = listenToUserPresenceInCloud((statusMap) => {
+      setCloudStatuses(statusMap);
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
 
   if (!activeServer) return null;
 
@@ -21,6 +36,8 @@ export default function MemberListSidebar() {
   const isMod = myRole === ROLES.MODERATOR;
   const canModerate = isOwner || isAdmin || isMod;
 
+  const voiceChannels = activeServer.channels?.filter((c) => c.type === 'voice') || [];
+
   // Group members
   const owners = [];
   const admins = [];
@@ -29,8 +46,28 @@ export default function MemberListSidebar() {
   const offlineMembers = [];
 
   serverMembers.forEach((member) => {
-    const realStatus = userStatuses.get(member.id) || member.status || USER_STATUS.OFFLINE;
-    const memberWithStatus = { ...member, status: realStatus };
+    const isMe = member.id === user?.id;
+    const realStatus = userStatuses?.get(member.id) 
+      || cloudStatuses.get(String(member.id)) 
+      || cloudStatuses.get(member.username?.toLowerCase()) 
+      || (isMe ? 'online' : (member.status || USER_STATUS.OFFLINE));
+    
+    // Check if this member is currently streaming
+    let streamingChannel = null;
+    for (const ch of voiceChannels) {
+      const usersInCh = activeVoiceChannel?.id === ch.id ? voiceUsers : (voiceChannelUsersMap.get(ch.id) || []);
+      if (usersInCh.some((u) => (String(u.userId) === String(member.id) || u.username === member.username) && u.isScreenSharing)) {
+        streamingChannel = ch;
+        break;
+      }
+    }
+
+    const memberWithStatus = { 
+      ...member, 
+      status: realStatus,
+      isStreaming: Boolean(streamingChannel),
+      streamingChannel
+    };
 
     if (member.role === ROLES.OWNER) {
       owners.push(memberWithStatus);
@@ -85,11 +122,13 @@ export default function MemberListSidebar() {
         key={member.id} 
         className="member-item"
         onClick={() => {
-          if (canModerate && !isMe) {
+          if (member.isStreaming && member.streamingChannel) {
+            watchStream({ userId: member.id, username: member.username }, member.streamingChannel);
+          } else if (canModerate && !isMe) {
             setSelectedMember(isSelected ? null : member);
           }
         }}
-        style={{ position: 'relative' }}
+        style={{ position: 'relative', cursor: 'pointer' }}
       >
         <div className="avatar-wrapper">
           <img 
@@ -101,6 +140,33 @@ export default function MemberListSidebar() {
         </div>
 
         <span className="member-item-name">{member.username}</span>
+
+        {member.isStreaming && (
+          <span 
+            style={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              gap: 3, 
+              fontSize: 9, 
+              backgroundColor: 'var(--accent-danger)', 
+              color: '#fff', 
+              padding: '2px 5px', 
+              borderRadius: 3, 
+              fontWeight: 800, 
+              marginLeft: 'auto',
+              cursor: 'pointer',
+              boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              watchStream({ userId: member.id, username: member.username }, member.streamingChannel);
+            }}
+            title="Transmitindo Ao Vivo - Clique para assistir"
+          >
+            <Radio size={10} />
+            AO VIVO
+          </span>
+        )}
 
         {member.role === ROLES.OWNER && <span className="role-badge owner">Dono</span>}
         {member.role === ROLES.ADMIN && <span className="role-badge admin">Admin</span>}

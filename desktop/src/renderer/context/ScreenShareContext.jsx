@@ -3,6 +3,7 @@ import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import { useVoice } from './VoiceContext';
 import { useServer } from './ServerContext';
+import { updateVoiceScreenSharingInCloud } from '../services/cloudSync';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
 
 const ScreenShareContext = createContext(null);
@@ -95,11 +96,18 @@ export function ScreenShareProvider({ children }) {
       localStreamRef.current = stream;
       setLocalScreenStream(stream);
       setIsScreenSharing(true);
-      setActivePresenter({
+      const presenterData = {
         userId: user?.id || 'presenter',
-        username: user?.username || 'Você'
-      });
+        username: user?.username || 'Você',
+        quality: screenQuality,
+        fps: screenFps,
+        channelId: currentVoice.id
+      };
+      setActivePresenter(presenterData);
       setIsPickerOpen(false);
+
+      // Notify Firestore cloud in real-time
+      updateVoiceScreenSharingInCloud(currentVoice.id, user?.id, true, presenterData);
 
       // Handle user stopping screen share via native browser/OS banner
       if (stream.getVideoTracks().length > 0) {
@@ -179,7 +187,11 @@ export function ScreenShareProvider({ children }) {
       setActivePresenter(null);
     }
 
-    if (socket && activeVoiceChannel) {
+    if (activeVoiceChannel) {
+      updateVoiceScreenSharingInCloud(activeVoiceChannel.id, user?.id, false, null);
+    }
+
+    if (socket && socket.connected && activeVoiceChannel) {
       socket.emit(SOCKET_EVENTS.SCREEN_STOP, {
         channelId: activeVoiceChannel.id
       });
@@ -189,6 +201,22 @@ export function ScreenShareProvider({ children }) {
     screenPeerConnectionsRef.current.forEach((pc) => pc.close());
     screenPeerConnectionsRef.current.clear();
   }, [socket, activeVoiceChannel, activePresenter, user?.id]);
+
+  const watchStream = (presenterUser, channel) => {
+    if (!presenterUser) return;
+    if (channel && (!activeVoiceChannel || activeVoiceChannel.id !== channel.id)) {
+      joinVoice(channel);
+    }
+    if (channel && setActiveChannel) {
+      setActiveChannel(channel);
+    }
+    setActivePresenter({
+      userId: presenterUser.userId,
+      username: presenterUser.username,
+      quality: screenQuality,
+      fps: screenFps
+    });
+  };
 
   // Clean up if leaving voice
   useEffect(() => {
@@ -319,7 +347,9 @@ export function ScreenShareProvider({ children }) {
         setScreenFps,
         setIsPickerOpen,
         startScreenShare,
-        stopScreenShare
+        stopScreenShare,
+        watchStream,
+        setActivePresenter
       }}
     >
       {children}

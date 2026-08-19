@@ -496,6 +496,52 @@ export function ServerProvider({ children }) {
     return { channel: newCh };
   };
 
+  const deleteChannel = async (serverId, channelId) => {
+    if (!serverId || !channelId) return;
+
+    if (api.hasBackend()) {
+      try {
+        await api.deleteChannel(serverId, channelId);
+        await refreshServerDetails(serverId);
+        return;
+      } catch (err) {}
+    }
+
+    try {
+      await leaveVoiceInCloud(channelId, user?.id, user?.username);
+    } catch (e) {}
+
+    let updatedServer = null;
+    setActiveServer((prev) => {
+      if (!prev || prev.id !== serverId) return prev;
+      const updatedChannels = (prev.channels || []).filter((c) => c.id !== channelId);
+      updatedServer = {
+        ...prev,
+        channels: updatedChannels
+      };
+      saveServerToCloud(updatedServer);
+      return updatedServer;
+    });
+
+    setServers((prev) => {
+      const next = prev.map((s) => {
+        if (s.id !== serverId) return s;
+        const updatedChannels = (s.channels || []).filter((c) => c.id !== channelId);
+        return { ...s, channels: updatedChannels };
+      });
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+
+    setActiveChannel((prev) => {
+      if (prev?.id === channelId) {
+        const remaining = updatedServer?.channels || [];
+        return remaining[0] || null;
+      }
+      return prev;
+    });
+  };
+
   const deleteServer = async (serverId) => {
     if (api.hasBackend()) {
       try {
@@ -758,6 +804,7 @@ export function ServerProvider({ children }) {
         deleteServer,
         leaveServer,
         createChannel,
+        deleteChannel,
         createInvite,
         joinByCode,
         respondInvite
