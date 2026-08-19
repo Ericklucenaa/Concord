@@ -9,6 +9,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
+  sendPasswordResetEmail,
   signOut
 } from 'firebase/auth';
 
@@ -135,4 +136,11 @@ export async function signOutFirebase() {
   } catch (err) {
     console.warn('Sign out error:', err);
   }
+}
+
+export async function resetPasswordWithEmail(email) {
+  if (!email || !email.trim()) throw new Error('Informe seu e-mail para receber o link de redefinição.');
+  const cleanEmail = email.trim();
+  await sendPasswordResetEmail(auth, cleanEmail);
+  return true;
 }

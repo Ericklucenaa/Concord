@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Search, X } from 'lucide-react';
 
 const EMOJI_CATEGORIES = [
@@ -22,6 +22,27 @@ const EMOJI_CATEGORIES = [
 
 export default function EmojiPickerPopover({ onSelectEmoji, onClose }) {
   const [searchTerm, setSearchTerm] = useState('');
+  const popoverRef = useRef(null);
+
+  useEffect(() => {
+    const handleDocumentClick = (e) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) {
+        if (onClose) onClose();
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (onClose) onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleDocumentClick);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [onClose]);
 
   const filteredCategories = EMOJI_CATEGORIES.map((cat) => {
     if (!searchTerm.trim()) return cat;
@@ -29,8 +50,16 @@ export default function EmojiPickerPopover({ onSelectEmoji, onClose }) {
     return { ...cat, emojis };
   }).filter((cat) => cat.emojis.length > 0);
 
+  const handleEmojiClick = (e, emoji) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onSelectEmoji(emoji);
+    if (onClose) onClose();
+  };
+
   return (
     <div 
+      ref={popoverRef}
       className="emoji-picker-popover"
       style={{
         position: 'absolute',
@@ -40,7 +69,7 @@ export default function EmojiPickerPopover({ onSelectEmoji, onClose }) {
         height: '380px',
         backgroundColor: 'var(--bg-tertiary)',
         border: '1px solid var(--border-color)',
-        borderRadius: 'var(--radius-lg)',
+        borderRadius: 'var(--radius-md)',
         boxShadow: 'var(--shadow-xl)',
         display: 'flex',
         flexDirection: 'column',
@@ -69,7 +98,12 @@ export default function EmojiPickerPopover({ onSelectEmoji, onClose }) {
           }}
         />
         {onClose && (
-          <button className="icon-btn" onClick={onClose} style={{ padding: 2 }}>
+          <button 
+            type="button" 
+            className="icon-btn" 
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }} 
+            style={{ padding: 2 }}
+          >
             <X size={14} />
           </button>
         )}
@@ -85,8 +119,9 @@ export default function EmojiPickerPopover({ onSelectEmoji, onClose }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
               {cat.emojis.map((emoji, idx) => (
                 <button
+                  type="button"
                   key={idx}
-                  onClick={() => onSelectEmoji(emoji)}
+                  onClick={(e) => handleEmojiClick(e, emoji)}
                   style={{
                     fontSize: 20,
                     width: '36px',

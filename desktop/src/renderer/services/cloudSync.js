@@ -49,24 +49,55 @@ export async function syncUserToCloud(user) {
   } catch (err) {}
 }
 
-export async function findUserByNicknameInCloud(nickname) {
-  if (!nickname) return null;
-  const cleanNick = nickname.trim().replace(/^@/, '').toLowerCase();
-  try {
-    const nickDocRef = doc(firestore, 'concord_nicknames', cleanNick);
-    const snap = await getDoc(nickDocRef);
-    if (snap.exists()) {
-      return snap.data();
-    }
+export async function findUserByNicknameInCloud(queryTerm) {
+  if (!queryTerm) return null;
+  const cleanInput = queryTerm.trim().replace(/^@/, '');
+  
+  // If user searched with tag: e.g. "Lucas#1042" or "#1042"
+  let targetNick = cleanInput.toLowerCase();
+  let targetTag = null;
+  if (cleanInput.includes('#')) {
+    const parts = cleanInput.split('#');
+    targetNick = parts[0].trim().toLowerCase();
+    targetTag = parts[1].trim().toUpperCase();
+  }
 
-    // Fallback search in users collection
-    const q = query(
-      collection(firestore, 'concord_users'),
-      where('username', '==', nickname.trim().replace(/^@/, ''))
-    );
-    const querySnapshot = await getDocs(q);
-    if (!querySnapshot.empty) {
-      return querySnapshot.docs[0].data();
+  try {
+    const usersColl = collection(firestore, 'concord_users');
+    const snap = await getDocs(usersColl);
+    let matchedUser = null;
+
+    snap.forEach((docSnap) => {
+      const u = docSnap.data();
+      if (!u) return;
+      const uName = (u.username || '').toLowerCase();
+      const uTag = (u.userTag || (u.id ? String(u.id).substring(0, 4) : '')).toUpperCase();
+
+      if (targetTag && !targetNick) {
+        // Searched by "#TAG"
+        if (uTag === targetTag || String(u.id).toUpperCase().startsWith(targetTag)) {
+          matchedUser = u;
+        }
+      } else if (targetTag && targetNick) {
+        // Searched by "Name#TAG"
+        if (uName === targetNick && (uTag === targetTag || String(u.id).toUpperCase().startsWith(targetTag))) {
+          matchedUser = u;
+        }
+      } else if (uName === targetNick) {
+        // Searched by "Name"
+        matchedUser = u;
+      }
+    });
+
+    if (matchedUser) return matchedUser;
+
+    // Fallback: check nicknames registry
+    if (targetNick) {
+      const nickDocRef = doc(firestore, 'concord_nicknames', targetNick);
+      const nickSnap = await getDoc(nickDocRef);
+      if (nickSnap.exists()) {
+        return nickSnap.data();
+      }
     }
   } catch (err) {}
   return null;

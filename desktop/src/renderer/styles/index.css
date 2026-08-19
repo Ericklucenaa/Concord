@@ -1,40 +1,40 @@
 :root {
-  /* Dark Theme Palette (Default) */
-  --bg-primary: #0e1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #1f242d;
-  --bg-hover: #262c36;
-  --bg-active: #2f3642;
-  --bg-card: rgba(26, 31, 41, 0.75);
+  /* Dark Theme Palette (Default Discord Dark) */
+  --bg-primary: #313338;
+  --bg-secondary: #2b2d31;
+  --bg-tertiary: #1e1f22;
+  --bg-hover: #35373c;
+  --bg-active: #3b3e45;
+  --bg-card: rgba(43, 45, 49, 0.95);
 
   --border-color: rgba(255, 255, 255, 0.08);
-  --border-focus: #6366f1;
+  --border-focus: #5865f2;
 
-  --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
+  --text-primary: #f2f3f5;
+  --text-secondary: #b5bac1;
+  --text-muted: #949ba4;
 
-  --accent-primary: #6366f1;
-  --accent-primary-hover: #4f46e5;
-  --accent-glow: rgba(99, 102, 241, 0.35);
+  --accent-primary: #5865f2;
+  --accent-primary-hover: #4752c4;
+  --accent-glow: rgba(88, 101, 242, 0.25);
 
-  --accent-success: #10b981;
-  --accent-warning: #f59e0b;
-  --accent-danger: #ef4444;
-  --accent-danger-hover: #dc2626;
+  --accent-success: #23a55a;
+  --accent-warning: #f0b232;
+  --accent-danger: #f23f43;
+  --accent-danger-hover: #da373c;
 
-  --status-online: #10b981;
-  --status-idle: #f59e0b;
-  --status-dnd: #ef4444;
-  --status-offline: #6b7280;
+  --status-online: #23a55a;
+  --status-idle: #f0b232;
+  --status-dnd: #f23f43;
+  --status-offline: #80848e;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
   --radius-full: 9999px;
 
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
 
   --titlebar-height: 34px;
@@ -42,28 +42,80 @@
   --channel-sidebar-width: 240px;
   --member-sidebar-width: 240px;
 
-  --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-main: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, monospace;
+}
+
+[data-theme='midnight'] {
+  --bg-primary: #000000;
+  --bg-secondary: #090a0c;
+  --bg-tertiary: #121316;
+  --bg-hover: #1c1d22;
+  --bg-active: #27282f;
+  --bg-card: rgba(18, 19, 22, 0.95);
+  --border-color: rgba(255, 255, 255, 0.09);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+}
+
+[data-theme='slate'] {
+  --bg-primary: #181a20;
+  --bg-secondary: #1e2029;
+  --bg-tertiary: #262934;
+  --bg-hover: #303342;
+  --bg-active: #3c4052;
+  --bg-card: rgba(30, 32, 41, 0.95);
+  --border-color: rgba(255, 255, 255, 0.08);
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+}
+
+[data-theme='ocean'] {
+  --bg-primary: #0a1118;
+  --bg-secondary: #0f1a26;
+  --bg-tertiary: #162436;
+  --bg-hover: #1e3149;
+  --bg-active: #284263;
+  --bg-card: rgba(15, 26, 38, 0.95);
+  --border-color: rgba(56, 189, 248, 0.12);
+  --text-primary: #f0f9ff;
+  --text-secondary: #bae6fd;
+  --text-muted: #7dd3fc;
+}
+
+[data-theme='forest'] {
+  --bg-primary: #0a1410;
+  --bg-secondary: #0f1e18;
+  --bg-tertiary: #152921;
+  --bg-hover: #1e382d;
+  --bg-active: #294c3e;
+  --bg-card: rgba(15, 30, 24, 0.95);
+  --border-color: rgba(52, 211, 153, 0.12);
+  --text-primary: #ecfdf5;
+  --text-secondary: #a7f3d0;
+  --text-muted: #6ee7b7;
 }
 
 [data-theme='light'] {
-  --bg-primary: #f8fafc;
-  --bg-secondary: #f1f5f9;
-  --bg-tertiary: #e2e8f0;
-  --bg-hover: #cbd5e1;
-  --bg-active: #94a3b8;
-  --bg-card: rgba(255, 255, 255, 0.9);
+  --bg-primary: #f2f3f5;
+  --bg-secondary: #ebedef;
+  --bg-tertiary: #e3e5e8;
+  --bg-hover: #d7d9dc;
+  --bg-active: #c7c9cc;
+  --bg-card: rgba(255, 255, 255, 0.98);
 
-  --border-color: rgba(0, 0, 0, 0.1);
-  --border-focus: #4f46e5;
+  --border-color: rgba(0, 0, 0, 0.12);
+  --border-focus: #5865f2;
 
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text-primary: #060607;
+  --text-secondary: #4e5058;
+  --text-muted: #5c5e66;
 
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.12);
 }
 
 * {

@@ -653,11 +653,15 @@ export default function DirectChatArea() {
             >
               <Smile size={18} />
             </button>
-            <EmojiPickerPopover 
-              isOpen={isEmojiPickerOpen} 
-              onClose={() => setIsEmojiPickerOpen(false)}
-              onSelectEmoji={(emoji) => setMessageText((prev) => prev + emoji)}
-            />
+            {isEmojiPickerOpen && (
+              <EmojiPickerPopover 
+                onClose={() => setIsEmojiPickerOpen(false)}
+                onSelectEmoji={(emoji) => {
+                  setMessageText((prev) => prev + emoji);
+                  setIsEmojiPickerOpen(false);
+                }}
+              />
+            )}
           </div>
 
           <button 

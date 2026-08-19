@@ -148,7 +148,7 @@ export default function DirectMessagesSidebar() {
           </div>
           <div className="user-names">
             <span className="user-username">{user?.username}</span>
-            <span className="user-tag">#{user?.id ? user.id.substring(0, 4) : '0000'}</span>
+            <span className="user-tag">#{user?.userTag || (user?.id ? String(user.id).substring(0, 4).toUpperCase() : '0000')}</span>
           </div>
         </div>
 

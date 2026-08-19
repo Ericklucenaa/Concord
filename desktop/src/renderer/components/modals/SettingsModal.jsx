@@ -199,14 +199,6 @@ export default function SettingsModal() {
     setAvatarPreview(newAvatar);
   };
 
-  const copyMyNickname = () => {
-    const nick = username || user?.username;
-    if (!nick) return;
-    navigator.clipboard.writeText(`@${nick.replace(/^@/, '')}`);
-    setCopiedNickname(true);
-    setTimeout(() => setCopiedNickname(false), 2000);
-  };
-
   const handleSaveAccount = async (e) => {
     e.preventDefault();
     try {
@@ -228,6 +220,7 @@ export default function SettingsModal() {
 
       await updateProfile({
         username: cleanUser,
+        userTag,
         avatar: avatarPreview,
         status,
         customStatus: customStatus.trim(),
@@ -237,8 +230,8 @@ export default function SettingsModal() {
       setSaveSuccess(true);
       setCurrentPassword('');
       setNewPassword('');
-      showToast(`Perfil atualizado com sucesso! Apelido: @${cleanUser}`, 'success');
-      showSuccess('Perfil Atualizado com Sucesso!', `Seu apelido agora é @${cleanUser} e já está sincronizado em tempo real para todos os servidores e amigos sem precisar recarregar a tela.`);
+      showToast(`Perfil atualizado com sucesso! Identificador: ${cleanUser}#${userTag}`, 'success');
+      showSuccess('Perfil Atualizado!', `Seu apelido agora é ${cleanUser}#${userTag} e já está sincronizado em tempo real sem precisar atualizar a tela.`);
     } catch (err) {
       setError(err.message || 'Erro ao salvar perfil.');
       showError('Não foi possível salvar', err.message || 'Erro ao atualizar dados do perfil.');
@@ -249,7 +242,7 @@ export default function SettingsModal() {
 
   return (
     <div className="modal-backdrop" onClick={() => closeModal('settings')}>
-      <div className="modal-container" style={{ width: 720, height: 580 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container" style={{ width: 740, height: 600 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', height: '100%' }}>
           {/* Settings Sidebar */}
           <div 
@@ -315,7 +308,7 @@ export default function SettingsModal() {
               <h3 className="modal-title">
                 {activeTab === 'account' && 'Minha Conta'}
                 {activeTab === 'audio' && 'Configurações de Áudio & Microfone'}
-                {activeTab === 'appearance' && 'Aparência'}
+                {activeTab === 'appearance' && 'Aparência & Personalização'}
               </h3>
               <button className="icon-btn" onClick={() => closeModal('settings')}>
                 <X size={18} />
@@ -345,14 +338,14 @@ export default function SettingsModal() {
                   {/* Avatar Picker Section */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 18, padding: 14, backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     <div 
-                      style={{ position: 'relative', width: 80, height: 80, cursor: 'pointer', flexShrink: 0 }}
+                      style={{ position: 'relative', width: 72, height: 72, cursor: 'pointer', flexShrink: 0 }}
                       onClick={() => fileInputRef.current?.click()}
                       title="Clique para escolher foto do computador"
                     >
                       <img 
                         src={avatarPreview}
                         alt="Avatar" 
-                        style={{ width: 80, height: 80, borderRadius: 'var(--radius-full)', backgroundColor: 'var(--bg-primary)', objectFit: 'cover', border: '2px solid var(--accent-primary)' }}
+                        style={{ width: 72, height: 72, borderRadius: 'var(--radius-full)', backgroundColor: 'var(--bg-primary)', objectFit: 'cover', border: '2px solid var(--accent-primary)' }}
                       />
                       <div 
                         style={{
@@ -370,68 +363,79 @@ export default function SettingsModal() {
                         onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
                         onMouseLeave={(e) => e.currentTarget.style.opacity = 0}
                       >
-                        <Camera size={24} />
+                        <Camera size={22} />
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
-                      <span style={{ fontSize: 15, fontWeight: 700 }}>Foto de Perfil</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                      <span style={{ fontSize: 14, fontWeight: 700 }}>Foto de Perfil</span>
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="btn btn-primary"
-                          style={{ padding: '6px 12px', fontSize: 13 }}
+                          style={{ padding: '5px 12px', fontSize: 12 }}
                           onClick={() => fileInputRef.current?.click()}
                         >
-                          <Upload size={15} />
-                          Alterar Foto (Do Computador)
+                          <Upload size={14} />
+                          Alterar Foto
                         </button>
                         <button
                           type="button"
                           className="btn btn-secondary"
-                          style={{ padding: '6px 12px', fontSize: 13 }}
+                          style={{ padding: '5px 12px', fontSize: 12 }}
                           onClick={handleRandomAvatar}
                         >
-                          <RefreshCw size={14} />
+                          <RefreshCw size={13} />
                           Gerar Aleatório
                         </button>
                       </div>
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                        Formatos suportados: PNG, JPG, GIF ou WEBP até 5MB.
-                      </span>
                     </div>
                   </div>
 
-                  {/* Nickname / Apelido Único Section */}
+                  {/* Nickname / Meu Apelido Section */}
                   <div className="form-group" style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <label className="form-label" style={{ marginBottom: 0, fontWeight: 700 }}>
-                        Meu Apelido Único (@apelido)
+                        Meu apelido
                       </label>
                       <button 
                         type="button" 
                         className="btn btn-secondary" 
                         style={{ padding: '4px 10px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
                         onClick={copyMyNickname}
-                        title="Copiar meu @apelido para compartilhar com amigos"
+                        title={`Copiar ${username || user?.username}#${userTag}`}
                       >
                         {copiedNickname ? <Check size={13} style={{ color: 'var(--accent-success)' }} /> : <Copy size={13} />}
-                        {copiedNickname ? 'Copiado!' : 'Copiar @apelido'}
+                        {copiedNickname ? 'Copiado!' : 'Copiar Apelido'}
                       </button>
                     </div>
-                    <div style={{ position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <input 
                         type="text" 
                         className="form-input" 
                         placeholder="ex: seu_apelido" 
                         value={username} 
                         onChange={(e) => setUsername(e.target.value)}
-                        style={{ width: '100%', fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+                        style={{ flex: 1, fontWeight: 600 }}
                         required 
                       />
+                      <span 
+                        style={{ 
+                          padding: '8px 12px', 
+                          backgroundColor: 'var(--bg-secondary)', 
+                          borderRadius: 'var(--radius-sm)', 
+                          fontFamily: 'var(--font-mono)', 
+                          fontSize: 13, 
+                          color: 'var(--text-muted)', 
+                          fontWeight: 700, 
+                          border: '1px solid var(--border-color)' 
+                        }}
+                      >
+                        #{userTag}
+                      </span>
                     </div>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
-                      Outras pessoas usam este @apelido para convidar você para servidores e canais. Deve ter entre 3 e 24 caracteres (letras, números e _).
+                      Seu identificador completo para amigos e convites é <strong>{username || user?.username}#{userTag}</strong>.
                     </span>
                   </div>
 
@@ -440,14 +444,11 @@ export default function SettingsModal() {
                     <input 
                       type="text" 
                       className="form-input" 
-                      placeholder="ex: 🎮 Jogando Summoners War, 🎧 Ouvindo Música, 💻 Focado..." 
+                      placeholder="ex: Trabalhando, Estudando, Ouvindo música, Disponível, Em reunião..." 
                       value={customStatus} 
                       onChange={(e) => setCustomStatus(e.target.value)}
                       maxLength={60}
                     />
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
-                      Aparece para seus amigos no seu perfil e na lista de membros.
-                    </span>
                   </div>
 
                   <div className="form-group">
@@ -459,28 +460,35 @@ export default function SettingsModal() {
                     >
                       <option value={USER_STATUS.ONLINE}>🟢 Online</option>
                       <option value={USER_STATUS.IDLE}>🟡 Ausente</option>
-                      <option value={USER_STATUS.DND}>🔴 Não Incomodar</option>
-                      <option value={USER_STATUS.OFFLINE}>⚫ Invisível / Offline</option>
+                      <option value={USER_STATUS.DND}>🔴 Não Perturbe</option>
+                      <option value={USER_STATUS.OFFLINE}>⚪ Invisível</option>
                     </select>
                   </div>
 
+                  {/* Password Change Section */}
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
-                    <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Alterar Senha (Opcional)</h4>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div className="form-group" style={{ flex: 1 }}>
-                        <label className="form-label">Senha Atual</label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>
+                      <KeyRound size={15} />
+                      Alterar Senha de Acesso (Opcional)
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ fontSize: 11 }}>Senha Atual</label>
                         <input 
                           type="password" 
                           className="form-input" 
+                          placeholder="••••••••" 
                           value={currentPassword} 
                           onChange={(e) => setCurrentPassword(e.target.value)} 
                         />
                       </div>
-                      <div className="form-group" style={{ flex: 1 }}>
-                        <label className="form-label">Nova Senha</label>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ fontSize: 11 }}>Nova Senha</label>
                         <input 
                           type="password" 
                           className="form-input" 
+                          placeholder="Mínimo 6 caracteres" 
                           value={newPassword} 
                           onChange={(e) => setNewPassword(e.target.value)} 
                         />
@@ -488,52 +496,44 @@ export default function SettingsModal() {
                     </div>
                   </div>
 
-                  <button 
-                    type="submit" 
-                    className="btn btn-primary"
-                    disabled={isSaving}
-                    style={{ alignSelf: 'flex-start', marginTop: 8 }}
-                  >
-                    <Save size={16} />
-                    {isSaving ? 'Salvando...' : 'Salvar Alterações'}
-                  </button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                    <button type="submit" className="btn btn-primary" disabled={isSaving} style={{ padding: '8px 18px', fontWeight: 700 }}>
+                      <Save size={15} />
+                      {isSaving ? 'Salvando...' : 'Salvar Alterações'}
+                    </button>
+                  </div>
                 </form>
               )}
 
-              {/* AUDIO TAB */}
+              {/* AUDIO & VOICE TAB */}
               {activeTab === 'audio' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  {/* Real Hardware Device Validation Banner */}
-                  <div style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700 }}>Dispositivos de Áudio do Computador</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                          Identifica e valida os microfones e alto-falantes reais conectados ao seu PC.
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
-                        onClick={handleScanRealDevices}
-                        disabled={isScanningDevices}
-                      >
-                        <RefreshCw size={13} className={isScanningDevices ? 'spin' : ''} />
-                        {isScanningDevices ? 'Validando...' : 'Escanear Dispositivos'}
-                      </button>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>Detectar Dispositivos de Áudio do Sistema</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Escaneia microfones e fones reais conectados</div>
                     </div>
-
-                    {deviceScanMessage && (
-                      <div style={{ fontSize: 12, color: 'var(--accent-success)', backgroundColor: 'rgba(16, 185, 129, 0.12)', padding: '6px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(16, 185, 129, 0.3)', marginTop: 8 }}>
-                        {deviceScanMessage}
-                      </div>
-                    )}
+                    <button 
+                      type="button" 
+                      className="btn btn-primary"
+                      onClick={handleScanRealDevices}
+                      disabled={isScanningDevices}
+                      style={{ padding: '6px 12px', fontSize: 12 }}
+                    >
+                      <RefreshCw size={13} className={isScanningDevices ? 'spin' : ''} />
+                      {isScanningDevices ? 'Escaneando...' : 'Escanear'}
+                    </button>
                   </div>
+
+                  {deviceScanMessage && (
+                    <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '8px 12px', borderRadius: 'var(--radius-sm)', fontSize: 12, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                      {deviceScanMessage}
+                    </div>
+                  )}
 
                   <div className="form-group">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Entrada (Microfone Real)</label>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Entrada (Microfone)</label>
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{inputDevices.length} detectado(s)</span>
                     </div>
                     <select 
@@ -551,7 +551,7 @@ export default function SettingsModal() {
 
                   <div className="form-group">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Saída (Alto-falantes / Fone Real)</label>
+                      <label className="form-label" style={{ marginBottom: 0 }}>Dispositivo de Saída (Alto-falantes / Fone)</label>
                       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{outputDevices.length} detectado(s)</span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
@@ -573,37 +573,31 @@ export default function SettingsModal() {
                         style={{ padding: '0 12px', fontSize: 12, whiteSpace: 'nowrap' }}
                         onClick={handleTestOutputSound}
                         disabled={isPlayingSoundTest}
-                        title="Tocar som de teste no alto-falante selecionado"
                       >
-                        <Volume2 size={15} style={{ color: isPlayingSoundTest ? 'var(--accent-success)' : undefined }} />
-                        {isPlayingSoundTest ? 'Tocando Som...' : 'Testar Saída'}
+                        <Volume2 size={15} />
+                        {isPlayingSoundTest ? 'Tocando...' : 'Testar Saída'}
                       </button>
                     </div>
                   </div>
 
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 14 }}>
                     <label className="form-label">Teste de Microfone em Tempo Real</label>
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
-                      Fale no microfone para calibrar o volume e verificar a captação antes de entrar em salas de voz.
-                    </p>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
                       <button 
                         type="button" 
                         className={`btn ${isTestingMic ? 'btn-danger' : 'btn-primary'}`}
                         onClick={toggleTestMic}
                       >
-                        <Mic size={16} />
-                        {isTestingMic ? 'Parar Teste' : 'Iniciar Teste de Microfone'}
+                        <Mic size={15} />
+                        {isTestingMic ? 'Parar Teste' : 'Iniciar Teste'}
                       </button>
 
-                      {/* Decibel Meter Bar */}
                       <div 
                         style={{ 
                           flex: 1, 
-                          height: 14, 
+                          height: 12, 
                           backgroundColor: 'var(--bg-tertiary)', 
-                          borderRadius: 'var(--radius-full)', 
+                          borderRadius: 'var(--radius-sm)', 
                           overflow: 'hidden',
                           border: '1px solid var(--border-color)'
                         }}
@@ -624,30 +618,159 @@ export default function SettingsModal() {
 
               {/* APPEARANCE TAB */}
               {activeTab === 'appearance' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  {/* Theme Selector */}
                   <div className="form-group">
-                    <label className="form-label">Tema da Interface</label>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <label className="form-label" style={{ fontWeight: 700, marginBottom: 8 }}>
+                      Tema da Interface
+                    </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                      {/* 1. Discord Dark */}
                       <div 
                         className={`source-item ${theme === 'dark' ? 'selected' : ''}`}
-                        style={{ flex: 1, padding: 16, alignItems: 'center', cursor: 'pointer' }}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#313338', border: theme === 'dark' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)' }}
                         onClick={() => setTheme('dark')}
                       >
-                        <Moon size={32} style={{ color: 'var(--accent-primary)' }} />
-                        <div style={{ fontWeight: 700, marginTop: 8 }}>Modo Escuro</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Estilo moderno e relaxante</div>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f2f3f5' }}>Escuro Clássico</div>
+                        <div style={{ fontSize: 11, color: '#949ba4' }}>Padrão Discord Dark</div>
                       </div>
 
+                      {/* 2. Midnight OLED */}
+                      <div 
+                        className={`source-item ${theme === 'midnight' ? 'selected' : ''}`}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#000000', border: theme === 'midnight' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.15)' }}
+                        onClick={() => setTheme('midnight')}
+                      >
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f8fafc' }}>Midnight OLED</div>
+                        <div style={{ fontSize: 11, color: '#64748b' }}>Preto Absoluto</div>
+                      </div>
+
+                      {/* 3. Slate / Grafite */}
+                      <div 
+                        className={`source-item ${theme === 'slate' ? 'selected' : ''}`}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#181a20', border: theme === 'slate' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)' }}
+                        onClick={() => setTheme('slate')}
+                      >
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9' }}>Grafite / Slate</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>Cinza Neutro Sóbrio</div>
+                      </div>
+
+                      {/* 4. Ocean Navy */}
+                      <div 
+                        className={`source-item ${theme === 'ocean' ? 'selected' : ''}`}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#0a1118', border: theme === 'ocean' ? '2px solid var(--accent-primary)' : '1px solid rgba(56,189,248,0.2)' }}
+                        onClick={() => setTheme('ocean')}
+                      >
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f0f9ff' }}>Deep Ocean</div>
+                        <div style={{ fontSize: 11, color: '#7dd3fc' }}>Azul Profundo Navy</div>
+                      </div>
+
+                      {/* 5. Forest Dark */}
+                      <div 
+                        className={`source-item ${theme === 'forest' ? 'selected' : ''}`}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#0a1410', border: theme === 'forest' ? '2px solid var(--accent-primary)' : '1px solid rgba(52,211,153,0.2)' }}
+                        onClick={() => setTheme('forest')}
+                      >
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#ecfdf5' }}>Forest Dark</div>
+                        <div style={{ fontSize: 11, color: '#6ee7b7' }}>Esmeralda Noturno</div>
+                      </div>
+
+                      {/* 6. Light Mode */}
                       <div 
                         className={`source-item ${theme === 'light' ? 'selected' : ''}`}
-                        style={{ flex: 1, padding: 16, alignItems: 'center', cursor: 'pointer' }}
+                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#ffffff', border: theme === 'light' ? '2px solid var(--accent-primary)' : '1px solid rgba(0,0,0,0.15)' }}
                         onClick={() => setTheme('light')}
                       >
-                        <Sun size={32} style={{ color: '#f59e0b' }} />
-                        <div style={{ fontWeight: 700, marginTop: 8 }}>Modo Claro</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Visual limpo e brilhante</div>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: '#060607' }}>Claro Clássico</div>
+                        <div style={{ fontSize: 11, color: '#5c5e66' }}>Tema Branco Limpo</div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* Custom Wallpaper Section */}
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 16 }}>
+                    <input 
+                      type="file" 
+                      ref={wallpaperInputRef} 
+                      accept="image/*" 
+                      style={{ display: 'none' }} 
+                      onChange={handleWallpaperSelect}
+                    />
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>Papel de Parede Personalizado do App</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Defina uma imagem de fundo para o Concord</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button 
+                          type="button" 
+                          className="btn btn-primary"
+                          style={{ padding: '6px 12px', fontSize: 12 }}
+                          onClick={() => wallpaperInputRef.current?.click()}
+                        >
+                          <Upload size={13} />
+                          Escolher Imagem
+                        </button>
+                        {wallpaper && (
+                          <button 
+                            type="button" 
+                            className="btn btn-secondary hover-danger"
+                            style={{ padding: '6px 12px', fontSize: 12 }}
+                            onClick={handleRemoveWallpaper}
+                          >
+                            Remover
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {wallpaper ? (
+                      <div style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                          <img 
+                            src={wallpaper} 
+                            alt="Wallpaper Preview" 
+                            style={{ width: 90, height: 55, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}
+                          />
+                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                                <span>Opacidade da Imagem:</span>
+                                <strong>{wallpaperOpacity}%</strong>
+                              </div>
+                              <input 
+                                type="range" 
+                                min="10" 
+                                max="100" 
+                                value={wallpaperOpacity} 
+                                onChange={(e) => handleUpdateOpacity(Number(e.target.value))}
+                                style={{ width: '100%' }}
+                              />
+                            </div>
+
+                            <div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                                <span>Desfoque (Blur):</span>
+                                <strong>{wallpaperBlur}px</strong>
+                              </div>
+                              <input 
+                                type="range" 
+                                min="0" 
+                                max="20" 
+                                value={wallpaperBlur} 
+                                onChange={(e) => handleUpdateBlur(Number(e.target.value))}
+                                style={{ width: '100%' }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ padding: '14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>
+                        Nenhum papel de parede ativo. Clique em "Escolher Imagem" para personalizar seu fundo.
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
