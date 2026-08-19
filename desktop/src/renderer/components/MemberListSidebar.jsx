@@ -21,6 +21,25 @@ export default function MemberListSidebar() {
   const [selectedMember, setSelectedMember] = useState(null);
   const [cloudStatuses, setCloudStatuses] = useState(new Map());
 
+  // Close open member menu when server changes
+  useEffect(() => {
+    setSelectedMember(null);
+  }, [activeServer?.id]);
+
+  // Close member menu on click outside
+  useEffect(() => {
+    if (!selectedMember) return;
+    const handleClickOutside = (e) => {
+      if (!e.target.closest('.dropdown-menu') && !e.target.closest('.member-item')) {
+        setSelectedMember(null);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => {
+      document.removeEventListener('pointerdown', handleClickOutside);
+    };
+  }, [selectedMember]);
+
   useEffect(() => {
     const unsub = listenToUserPresenceInCloud((statusMap) => {
       setCloudStatuses(statusMap);

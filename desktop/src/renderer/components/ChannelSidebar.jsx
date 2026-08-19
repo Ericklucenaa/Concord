@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
 import { useVoice } from '../context/VoiceContext';
@@ -67,6 +67,31 @@ export default function ChannelSidebar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [selectedVoiceUser, setSelectedVoiceUser] = useState(null);
   const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
+  const voiceUserPopoverRef = useRef(null);
+
+  // Close voice user modal whenever active server or channel changes
+  useEffect(() => {
+    setSelectedVoiceUser(null);
+    setIsMenuOpen(false);
+  }, [activeServer?.id, activeChannel?.id]);
+
+  // Close voice user modal when clicking anywhere outside
+  useEffect(() => {
+    if (!selectedVoiceUser) return;
+    const handleClickOutside = (e) => {
+      if (
+        voiceUserPopoverRef.current && 
+        !voiceUserPopoverRef.current.contains(e.target) && 
+        !e.target.closest('.voice-user-pill')
+      ) {
+        setSelectedVoiceUser(null);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => {
+      document.removeEventListener('pointerdown', handleClickOutside);
+    };
+  }, [selectedVoiceUser]);
 
   if (!activeServer) {
     return (
@@ -435,7 +460,7 @@ export default function ChannelSidebar() {
                             if (u.isScreenSharing) {
                               watchStream(u, channel);
                             } else {
-                              setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : u);
+                              setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : { ...u, channelId: channel.id });
                             }
                           }}
                           style={{
@@ -550,6 +575,7 @@ export default function ChannelSidebar() {
         {/* Discord-style Voice User Controls Modal/Popover */}
         {selectedVoiceUser && (
           <div 
+            ref={voiceUserPopoverRef}
             style={{
               margin: '8px 10px',
               padding: 12,
@@ -629,7 +655,10 @@ export default function ChannelSidebar() {
                       { isDanger: true, confirmText: 'Desconectar' }
                     );
                     if (confirmed) {
-                      kickUserFromVoice(activeVoiceChannel?.id || channel.id, selectedVoiceUser.userId, selectedVoiceUser.username);
+                      const targetChannelId = selectedVoiceUser.channelId || activeVoiceChannel?.id;
+                      if (targetChannelId) {
+                        kickUserFromVoice(targetChannelId, selectedVoiceUser.userId, selectedVoiceUser.username);
+                      }
                       setSelectedVoiceUser(null);
                     }
                   }}

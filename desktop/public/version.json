@@ -1,9 +1,9 @@
 {
-  "version": "1.0.5",
-  "name": "Concord v1.0.5",
+  "version": "1.0.6",
+  "name": "Concord v1.0.6",
   "releaseDate": "2026-08-19",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.5/Concord.Setup.1.0.5.exe",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.6/Concord.Setup.1.0.6.exe",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Geração automatizada de instalador executável único e limpeza de versões antigas.",
+  "releaseNotes": "Correção do erro ReferenceError ao desconectar usuário e fechamento automático de popovers ao alternar servidores ou clicar fora.",
   "isMandatory": false
 }
