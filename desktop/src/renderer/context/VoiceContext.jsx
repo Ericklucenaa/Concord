@@ -44,6 +44,7 @@ export function VoiceProvider({ children }) {
   const localStreamRef = useRef(null);
   const peerConnectionsRef = useRef(new Map()); // Map<userId, RTCPeerConnection>
   const remoteAudiosRef = useRef(new Map()); // Map<userId, HTMLAudioElement>
+  const iceCandidateQueuesRef = useRef(new Map()); // Map<userId, RTCIceCandidateInit[]>
   const iceServersRef = useRef(DEFAULT_ICE_SERVERS);
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
@@ -151,7 +152,7 @@ export function VoiceProvider({ children }) {
         const normalized = Math.min(100, Math.round((average / 128) * 100));
         setMicVolumeLevel(normalized);
 
-        const speakingNow = normalized > 12;
+        const speakingNow = normalized > 10;
         setIsSpeaking((prev) => {
           if (prev !== speakingNow) {
             if (socket && activeVoiceChannel) {
@@ -190,6 +191,66 @@ export function VoiceProvider({ children }) {
     setMicVolumeLevel(0);
   };
 
+  // Ensure local mic stream is active and attached to all peer connections
+  const ensureLocalStream = async () => {
+    if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0 && localStreamRef.current.getAudioTracks()[0].readyState === 'live') {
+      localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
+      return localStreamRef.current;
+    }
+
+    try {
+      const audioConstraints = selectedInputDevice
+        ? { deviceId: { ideal: selectedInputDevice }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraints,
+        video: false
+      });
+
+      localStreamRef.current = stream;
+
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !isMuted;
+      });
+
+      startSpeakingDetector(stream);
+
+      // Attach audio tracks to any existing peer connections
+      peerConnectionsRef.current.forEach((pc) => {
+        const senders = pc.getSenders();
+        stream.getAudioTracks().forEach((track) => {
+          const sender = senders.find((s) => s.track && s.track.kind === 'audio');
+          if (sender) {
+            sender.replaceTrack(track).catch(() => {});
+          } else {
+            try {
+              pc.addTrack(track, stream);
+            } catch (e) {}
+          }
+        });
+      });
+
+      return stream;
+    } catch (err) {
+      console.warn('Microphone capture error:', err);
+      return null;
+    }
+  };
+
+  // Helper to drain queued ICE candidates once remote description is set
+  const drainIceCandidates = async (targetUserId, pc) => {
+    const queue = iceCandidateQueuesRef.current.get(targetUserId) || [];
+    iceCandidateQueuesRef.current.delete(targetUserId);
+    for (const candidateData of queue) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidateData));
+      } catch (e) {
+        console.warn('Error applying queued ICE candidate:', e);
+      }
+    }
+  };
+
   // Helper to create Peer Connection for a remote user
   const createPeerConnection = (targetUserId, channelId) => {
     if (peerConnectionsRef.current.has(targetUserId)) {
@@ -197,7 +258,8 @@ export function VoiceProvider({ children }) {
     }
 
     const pc = new RTCPeerConnection({
-      iceServers: iceServersRef.current
+      iceServers: iceServersRef.current,
+      iceCandidatePoolSize: 10
     });
 
     // Add local audio tracks if available
@@ -212,15 +274,22 @@ export function VoiceProvider({ children }) {
     // ICE Candidates
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const candidatePayload = {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+          usernameFragment: event.candidate.usernameFragment
+        };
+
         if (socket && socket.connected) {
           socket.emit(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, {
             targetUserId,
             channelId,
-            candidate: event.candidate
+            candidate: candidatePayload
           });
         }
         if (user?.id) {
-          sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'candidate', event.candidate);
+          sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'candidate', candidatePayload);
         }
       }
     };
@@ -228,20 +297,38 @@ export function VoiceProvider({ children }) {
     // Receive Remote Audio Track
     pc.ontrack = (event) => {
       const [remoteStream] = event.streams;
-      if (remoteStream) {
-        let audioEl = remoteAudiosRef.current.get(targetUserId);
-        if (!audioEl) {
-          audioEl = new Audio();
-          audioEl.autoplay = true;
-          audioEl.playsInline = true;
-          document.body.appendChild(audioEl);
-          remoteAudiosRef.current.set(targetUserId, audioEl);
-        }
-        audioEl.srcObject = remoteStream;
-        const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
-        audioEl.volume = isDeafened ? 0 : volume;
-        audioEl.play().catch((err) => {
-          console.warn('Remote audio playback pending user interaction:', err);
+      const track = event.track;
+      const streamToPlay = remoteStream || new MediaStream([track]);
+
+      let audioEl = remoteAudiosRef.current.get(targetUserId);
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.id = `remote-audio-${targetUserId}`;
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        audioEl.style.display = 'none';
+        document.body.appendChild(audioEl);
+        remoteAudiosRef.current.set(targetUserId, audioEl);
+      }
+
+      if (audioEl.srcObject !== streamToPlay) {
+        audioEl.srcObject = streamToPlay;
+      }
+
+      const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
+      audioEl.volume = isDeafened ? 0 : volume;
+
+      const playPromise = audioEl.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn(`Remote audio autoplay pending interaction for user ${targetUserId}:`, err);
+          const resumeAudio = () => {
+            audioEl.play().catch(() => {});
+            window.removeEventListener('click', resumeAudio);
+            window.removeEventListener('keydown', resumeAudio);
+          };
+          window.addEventListener('click', resumeAudio, { once: true });
+          window.addEventListener('keydown', resumeAudio, { once: true });
         });
       }
     };
@@ -250,26 +337,42 @@ export function VoiceProvider({ children }) {
     return pc;
   };
 
-  // Helper to send Offer to a remote user
+  // Helper to send Offer to a remote user (deterministic initiator: String(user.id) < String(targetUserId))
   const initiateVoiceOffer = async (targetUserId, channelId) => {
     if (!targetUserId || String(targetUserId) === String(user?.id) || !channelId) return;
     try {
+      const stream = await ensureLocalStream();
       const pc = createPeerConnection(targetUserId, channelId);
+
+      if (stream) {
+        const senders = pc.getSenders();
+        stream.getAudioTracks().forEach((track) => {
+          if (!senders.some((s) => s.track === track)) {
+            try { pc.addTrack(track, stream); } catch (e) {}
+          }
+        });
+      }
+
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: false
       });
       await pc.setLocalDescription(offer);
 
+      const offerPayload = {
+        type: offer.type,
+        sdp: offer.sdp
+      };
+
       if (socket && socket.connected) {
         socket.emit(SOCKET_EVENTS.VOICE_OFFER, {
           targetUserId,
           channelId,
-          offer
+          offer: offerPayload
         });
       }
       if (user?.id) {
-        sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'offer', offer);
+        sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'offer', offerPayload);
       }
     } catch (err) {
       console.warn(`Failed to create voice offer for ${targetUserId}:`, err);
@@ -280,20 +383,38 @@ export function VoiceProvider({ children }) {
   const handleIncomingVoiceOffer = async (senderUserId, channelId, offer) => {
     if (!senderUserId || String(senderUserId) === String(user?.id) || !channelId || !offer) return;
     try {
+      const stream = await ensureLocalStream();
       const pc = createPeerConnection(senderUserId, channelId);
+
+      if (stream) {
+        const senders = pc.getSenders();
+        stream.getAudioTracks().forEach((track) => {
+          if (!senders.some((s) => s.track === track)) {
+            try { pc.addTrack(track, stream); } catch (e) {}
+          }
+        });
+      }
+
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await drainIceCandidates(senderUserId, pc);
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
+
+      const answerPayload = {
+        type: answer.type,
+        sdp: answer.sdp
+      };
 
       if (socket && socket.connected) {
         socket.emit(SOCKET_EVENTS.VOICE_ANSWER, {
           targetUserId: senderUserId,
           channelId,
-          answer
+          answer: answerPayload
         });
       }
       if (user?.id) {
-        sendVoiceSignalInCloud(channelId, user.id, senderUserId, 'answer', answer);
+        sendVoiceSignalInCloud(channelId, user.id, senderUserId, 'answer', answerPayload);
       }
     } catch (err) {
       console.warn('Error handling incoming voice offer:', err);
@@ -307,6 +428,7 @@ export function VoiceProvider({ children }) {
       const pc = peerConnectionsRef.current.get(senderUserId);
       if (pc && pc.signalingState !== 'stable') {
         await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await drainIceCandidates(senderUserId, pc);
       }
     } catch (err) {
       console.warn('Error handling voice answer:', err);
@@ -318,8 +440,15 @@ export function VoiceProvider({ children }) {
     if (!senderUserId || !candidate) return;
     try {
       const pc = peerConnectionsRef.current.get(senderUserId);
-      if (pc) {
+
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } else {
+        // Queue candidate until setRemoteDescription completes
+        if (!iceCandidateQueuesRef.current.has(senderUserId)) {
+          iceCandidateQueuesRef.current.set(senderUserId, []);
+        }
+        iceCandidateQueuesRef.current.get(senderUserId).push(candidate);
       }
     } catch (err) {
       console.warn('Error adding voice ICE candidate:', err);
@@ -329,37 +458,14 @@ export function VoiceProvider({ children }) {
   // Join Voice Channel
   const joinVoice = async (channel) => {
     if (!channel) return;
-    if (activeVoiceChannel?.id === channel.id) return; // already in this room
+    if (activeVoiceChannel?.id === channel.id) return;
 
-    // Leave any current voice first
     if (activeVoiceChannel) {
       leaveVoice();
     }
 
     // Always acquire microphone stream
-    try {
-      const constraints = {
-        audio: {
-          deviceId: selectedInputDevice ? { exact: selectedInputDevice } : undefined,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        },
-        video: false
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      localStreamRef.current = stream;
-
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMuted;
-      });
-
-      startSpeakingDetector(stream);
-    } catch (err) {
-      console.warn('Microphone permission or capture error:', err);
-      showError('Microfone Inacessível', 'Não foi possível acessar seu microfone. Verifique as permissões de áudio do seu dispositivo.');
-    }
+    await ensureLocalStream();
 
     const participantInfo = {
       userId: user?.id || 'user-' + Date.now(),
@@ -405,6 +511,7 @@ export function VoiceProvider({ children }) {
 
     peerConnectionsRef.current.forEach((pc) => pc.close());
     peerConnectionsRef.current.clear();
+    iceCandidateQueuesRef.current.clear();
 
     remoteAudiosRef.current.forEach((audioEl) => {
       audioEl.srcObject = null;
@@ -571,7 +678,9 @@ export function VoiceProvider({ children }) {
 
       for (const remoteUser of users) {
         if (String(remoteUser.userId) === String(user?.id)) continue;
-        await initiateVoiceOffer(remoteUser.userId, channelId);
+        if (String(user?.id) < String(remoteUser.userId)) {
+          await initiateVoiceOffer(remoteUser.userId, channelId);
+        }
       }
     });
 
@@ -694,7 +803,7 @@ export function VoiceProvider({ children }) {
           // Connect WebRTC audio with all other users in this active voice room
           cleanUsers.forEach((remoteUser) => {
             if (remoteUser.userId && user?.id && String(remoteUser.userId) !== String(user.id)) {
-              if (String(user.id) < String(remoteUser.userId) || !peerConnectionsRef.current.has(remoteUser.userId)) {
+              if (String(user.id) < String(remoteUser.userId)) {
                 initiateVoiceOffer(remoteUser.userId, activeVoiceChannel.id);
               }
             }

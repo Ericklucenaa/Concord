@@ -1,9 +1,9 @@
 {
-  "version": "1.0.1",
-  "name": "Concord v1.0.1",
+  "version": "1.0.2",
+  "name": "Concord v1.0.2",
   "releaseDate": "2026-08-19",
   "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/latest",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Áudio WebRTC em tempo real, persistência permanente de sessão no Desktop, apelidos com tags exclusivas e novo sistema de auto-atualização.",
+  "releaseNotes": "Correção crítica no pipeline WebRTC P2P de áudio, eliminação de offer glare e fila de candidatos ICE para transmissão de voz imediata.",
   "isMandatory": false
 }
