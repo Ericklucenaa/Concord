@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import { useVoice } from './VoiceContext';
+import { useServer } from './ServerContext';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
 
 const ScreenShareContext = createContext(null);
@@ -9,7 +10,8 @@ const ScreenShareContext = createContext(null);
 export function ScreenShareProvider({ children }) {
   const { socket } = useSocket();
   const { user } = useAuth();
-  const { activeVoiceChannel, voiceUsers } = useVoice();
+  const { activeServer, activeChannel, setActiveChannel } = useServer();
+  const { activeVoiceChannel, voiceUsers, joinVoice } = useVoice();
 
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localScreenStream, setLocalScreenStream] = useState(null);
@@ -35,8 +37,26 @@ export function ScreenShareProvider({ children }) {
 
   // Start Screen Share
   const startScreenShare = async (sourceId) => {
-    if (!activeVoiceChannel || !socket) {
-      alert('Você precisa estar em um canal de voz para transmitir sua tela.');
+    let currentVoice = activeVoiceChannel;
+
+    // If not connected to voice yet, auto-connect to the active channel if it's voice,
+    // or to the first voice channel in the active server
+    if (!currentVoice) {
+      if (activeChannel?.type === 'voice') {
+        joinVoice(activeChannel);
+        currentVoice = activeChannel;
+      } else if (activeServer?.channels) {
+        const firstVoice = activeServer.channels.find((c) => c.type === 'voice');
+        if (firstVoice) {
+          joinVoice(firstVoice);
+          if (setActiveChannel) setActiveChannel(firstVoice);
+          currentVoice = firstVoice;
+        }
+      }
+    }
+
+    if (!currentVoice) {
+      alert('Clique em um canal de voz na barra lateral para conectar o áudio e a transmissão.');
       return;
     }
 
@@ -76,29 +96,36 @@ export function ScreenShareProvider({ children }) {
       setLocalScreenStream(stream);
       setIsScreenSharing(true);
       setActivePresenter({
-        userId: user.id,
-        username: user.username
+        userId: user?.id || 'presenter',
+        username: user?.username || 'Você'
       });
       setIsPickerOpen(false);
 
       // Handle user stopping screen share via native browser/OS banner
-      stream.getVideoTracks()[0].onended = () => {
-        stopScreenShare();
-      };
+      if (stream.getVideoTracks().length > 0) {
+        stream.getVideoTracks()[0].onended = () => {
+          stopScreenShare();
+        };
+      }
 
-      // Notify socket server
-      socket.emit(SOCKET_EVENTS.SCREEN_START, {
-        channelId: activeVoiceChannel.id,
-        quality: screenQuality,
-        fps: screenFps
-      });
+      // Notify socket server if connected
+      if (socket && socket.connected) {
+        socket.emit(SOCKET_EVENTS.SCREEN_START, {
+          channelId: currentVoice.id,
+          quality: screenQuality,
+          fps: screenFps
+        });
 
-      // Send screen video track offer to all participants in voice room
-      for (const remoteUser of voiceUsers) {
-        if (remoteUser.userId === user?.id) continue;
-        createAndSendScreenOffer(remoteUser.userId, activeVoiceChannel.id, stream);
+        // Send screen video track offer to all participants in voice room
+        for (const remoteUser of voiceUsers) {
+          if (remoteUser.userId === user?.id) continue;
+          createAndSendScreenOffer(remoteUser.userId, currentVoice.id, stream);
+        }
       }
     } catch (err) {
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+        return; // User canceled the screen selection prompt
+      }
       console.error('Error starting screen share:', err);
       alert('Não foi possível iniciar a transmissão de tela.');
     }

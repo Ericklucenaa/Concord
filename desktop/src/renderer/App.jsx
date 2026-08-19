@@ -21,12 +21,13 @@ import SettingsModal from './components/modals/SettingsModal';
 import ServerSettingsModal from './components/modals/ServerSettingsModal';
 
 import AuthPage from './pages/AuthPage';
-import { CHANNEL_TYPES } from '@shared/constants';
+import { useScreenShare } from './context/ScreenShareContext';
 
 function MainAppContent() {
   const { isAuthenticated, isLoading } = useAuth();
   const { activeChannel, joinByCode } = useServer();
   const { activeVoiceChannel } = useVoice();
+  const { isScreenSharing, activePresenter } = useScreenShare();
   const [showMemberList, setShowMemberList] = useState(true);
 
   // Capture invite code from URL on load (even if unauthenticated)
@@ -84,8 +85,8 @@ function MainAppContent() {
     return <AuthPage />;
   }
 
-  // Display Voice Room view if currently viewing a voice channel or connected to voice
-  const isVoiceView = activeChannel?.type === CHANNEL_TYPES.VOICE;
+  // Display Voice Room view if currently viewing a voice channel, connected to voice, or screen sharing
+  const isVoiceView = activeChannel?.type === 'voice' || (activeVoiceChannel && activeChannel?.id === activeVoiceChannel?.id) || isScreenSharing || Boolean(activePresenter);
 
   return (
     <div className="main-layout">
