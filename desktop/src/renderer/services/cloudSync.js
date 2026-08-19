@@ -638,3 +638,187 @@ export async function toggleMessageReactionInCloud(messageId, emoji, userId, use
     }
   } catch (err) {}
 }
+
+/**
+ * =========================================================================
+ * DIRECT MESSAGES (1-ON-1 DMS) & FRIENDS SYSTEM
+ * =========================================================================
+ */
+
+export function getDMConversationId(userId1, userId2) {
+  const ids = [String(userId1), String(userId2)].sort();
+  return `dm_${ids[0]}_${ids[1]}`;
+}
+
+export async function sendDirectMessageInCloud(dmId, message) {
+  if (!dmId || !message) return;
+  try {
+    const msgRef = doc(firestore, 'concord_direct_messages', String(message.id));
+    await setDoc(msgRef, {
+      ...message,
+      dmId: String(dmId),
+      createdAt: message.createdAt || new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error sending direct message in cloud:', err);
+  }
+}
+
+export function listenToDirectMessagesInCloud(dmId, callback) {
+  if (!dmId) return () => {};
+  try {
+    const q = query(
+      collection(firestore, 'concord_direct_messages'),
+      where('dmId', '==', String(dmId))
+    );
+    return onSnapshot(q, (snapshot) => {
+      const messages = [];
+      snapshot.forEach((docSnap) => {
+        messages.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      messages.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      callback(messages);
+    }, (err) => {});
+  } catch (err) {
+    return () => {};
+  }
+}
+
+export async function deleteDirectMessageFromCloud(messageId) {
+  if (!messageId) return;
+  try {
+    const msgRef = doc(firestore, 'concord_direct_messages', String(messageId));
+    await deleteDoc(msgRef);
+  } catch (err) {}
+}
+
+export async function toggleDirectMessageReactionInCloud(messageId, emoji, userId) {
+  if (!messageId || !emoji || !userId) return;
+  try {
+    const msgRef = doc(firestore, 'concord_direct_messages', String(messageId));
+    const snap = await getDoc(msgRef);
+    if (snap && snap.exists()) {
+      const data = snap.data();
+      const reactions = data.reactions || {};
+      const currentUsers = reactions[emoji] || [];
+      const hasReacted = currentUsers.includes(String(userId));
+
+      let updatedUsers = [];
+      if (hasReacted) {
+        updatedUsers = currentUsers.filter((uid) => uid !== String(userId));
+      } else {
+        updatedUsers = [...currentUsers, String(userId)];
+      }
+
+      const updatedReactions = { ...reactions };
+      if (updatedUsers.length > 0) {
+        updatedReactions[emoji] = updatedUsers;
+      } else {
+        delete updatedReactions[emoji];
+      }
+
+      await setDoc(msgRef, { reactions: updatedReactions }, { merge: true });
+    }
+  } catch (err) {}
+}
+
+export async function sendFriendRequestInCloud(fromUser, targetNickname) {
+  if (!fromUser || !targetNickname) throw new Error('Informe o apelido do amigo.');
+  const cleanTarget = targetNickname.trim().replace(/^@/, '').toLowerCase();
+  const cleanFromNick = (fromUser.username || '').trim().replace(/^@/, '').toLowerCase();
+
+  if (cleanTarget === cleanFromNick) {
+    throw new Error('Você não pode adicionar seu próprio perfil como amigo.');
+  }
+
+  // Look up friend in cloud
+  const targetUser = await findUserByNicknameInCloud(cleanTarget);
+  const friendId = `${cleanFromNick}_to_${cleanTarget}`;
+  const friendRef = doc(firestore, 'concord_friends', friendId);
+
+  const requestPayload = {
+    id: friendId,
+    senderId: String(fromUser.id),
+    senderUsername: fromUser.username,
+    senderAvatar: fromUser.avatar || '',
+    receiverNickname: cleanTarget,
+    receiverId: targetUser?.id || targetUser?.userId || '',
+    receiverUsername: targetUser?.username || targetNickname,
+    receiverAvatar: targetUser?.avatar || '',
+    status: 'pending', // 'pending' | 'accepted'
+    updatedAt: new Date().toISOString()
+  };
+
+  await setDoc(friendRef, requestPayload, { merge: true });
+  return requestPayload;
+}
+
+export async function respondFriendRequestInCloud(requestId, action, currentUser) {
+  if (!requestId) return;
+  try {
+    const friendRef = doc(firestore, 'concord_friends', String(requestId));
+    if (action === 'accept') {
+      await setDoc(friendRef, {
+        status: 'accepted',
+        receiverId: String(currentUser?.id || ''),
+        receiverUsername: currentUser?.username || '',
+        receiverAvatar: currentUser?.avatar || '',
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } else {
+      await deleteDoc(friendRef);
+    }
+  } catch (err) {}
+}
+
+export function listenToFriendsInCloud(myUsername, myUserId, callback) {
+  if (!myUsername && !myUserId) return () => {};
+  const cleanNick = (myUsername || '').trim().replace(/^@/, '').toLowerCase();
+
+  try {
+    const q1 = query(
+      collection(firestore, 'concord_friends'),
+      where('receiverNickname', '==', cleanNick)
+    );
+    const q2 = query(
+      collection(firestore, 'concord_friends'),
+      where('senderId', '==', String(myUserId))
+    );
+
+    let list1 = [];
+    let list2 = [];
+
+    const mergeAndEmit = () => {
+      const map = new Map();
+      [...list1, ...list2].forEach((f) => map.set(f.id, f));
+      callback(Array.from(map.values()));
+    };
+
+    const unsub1 = onSnapshot(q1, (snap) => {
+      list1 = [];
+      snap.forEach((d) => list1.push({ id: d.id, ...d.data() }));
+      mergeAndEmit();
+    }, () => {});
+
+    const unsub2 = onSnapshot(q2, (snap) => {
+      list2 = [];
+      snap.forEach((d) => list2.push({ id: d.id, ...d.data() }));
+      mergeAndEmit();
+    }, () => {});
+
+    return () => {
+      unsub1();
+      unsub2();
+    };
+  } catch (err) {
+    return () => {};
+  }
+}
+
+export async function removeFriendInCloud(friendshipId) {
+  if (!friendshipId) return;
+  try {
+    const friendRef = doc(firestore, 'concord_friends', String(friendshipId));
+    await deleteDoc(friendRef);
+  } catch (err) {}
+}

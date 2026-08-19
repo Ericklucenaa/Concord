@@ -30,6 +30,8 @@ export function VoiceProvider({ children }) {
   const [isDeafened, setIsDeafened] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [micVolumeLevel, setMicVolumeLevel] = useState(0);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [localCameraStream, setLocalCameraStream] = useState(null);
 
   const [inputDevices, setInputDevices] = useState([]);
   const [outputDevices, setOutputDevices] = useState([]);
@@ -320,9 +322,47 @@ export function VoiceProvider({ children }) {
     });
     remoteAudiosRef.current.clear();
 
+    if (localCameraStream) {
+      localCameraStream.getTracks().forEach((track) => track.stop());
+      setLocalCameraStream(null);
+      setIsCameraOn(false);
+    }
+
     setActiveVoiceChannel(null);
     setVoiceUsers([]);
-  }, [socket, activeVoiceChannel, user?.id, user?.username]);
+  }, [socket, activeVoiceChannel, user?.id, user?.username, localCameraStream]);
+
+  // Toggle Camera / Webcam
+  const toggleCamera = async () => {
+    if (!activeVoiceChannel) {
+      showError('Canal de Voz Necessário', 'Entre em um canal de voz para ligar a câmera.');
+      return;
+    }
+
+    if (isCameraOn) {
+      if (localCameraStream) {
+        localCameraStream.getTracks().forEach((t) => t.stop());
+      }
+      setLocalCameraStream(null);
+      setIsCameraOn(false);
+      updateVoiceUserStateInCloud(activeVoiceChannel.id, user?.id, { isCameraOn: false });
+      showToast('Câmera desativada', 'info');
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+          audio: false
+        });
+        setLocalCameraStream(stream);
+        setIsCameraOn(true);
+        updateVoiceUserStateInCloud(activeVoiceChannel.id, user?.id, { isCameraOn: true });
+        showToast('Câmera ativada com sucesso!', 'success');
+      } catch (err) {
+        console.error('Camera error:', err);
+        showError('Permissão de Câmera', 'Não foi possível acessar a webcam. Verifique as permissões de vídeo no navegador.');
+      }
+    }
+  };
 
   // Toggle Mute
   const toggleMute = () => {
@@ -637,6 +677,9 @@ export function VoiceProvider({ children }) {
         isDeafened,
         isSpeaking,
         micVolumeLevel,
+        isCameraOn,
+        localCameraStream,
+        toggleCamera,
         joinVoice,
         leaveVoice,
         toggleMute,

@@ -13,7 +13,10 @@ import {
   Sliders,
   Settings2,
   ExternalLink,
-  Sparkles
+  Sparkles,
+  Video,
+  VideoOff,
+  Headphones
 } from 'lucide-react';
 import SoundboardModal from './SoundboardModal';
 
@@ -25,6 +28,9 @@ export default function VoiceRoomArea() {
     isSpeaking, 
     isMuted,
     isDeafened,
+    isCameraOn,
+    localCameraStream,
+    toggleCamera,
     setUserVolume 
   } = useVoice();
   const { 
@@ -213,10 +219,19 @@ export default function VoiceRoomArea() {
             Você está conectado. Fale livremente ou compartilhe sua tela com o grupo.
           </p>
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button 
+              className={`btn ${isCameraOn ? 'btn-danger' : 'btn-secondary'}`}
+              onClick={toggleCamera}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              {isCameraOn ? <VideoOff size={16} /> : <Video size={16} />}
+              {isCameraOn ? 'Desligar Câmera' : 'Ligar Câmera'}
+            </button>
             <button 
               className="btn btn-primary"
               onClick={() => setIsPickerOpen(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
             >
               <Tv size={16} />
               Transmitir Minha Tela
@@ -224,6 +239,7 @@ export default function VoiceRoomArea() {
             <button 
               className="btn btn-secondary"
               onClick={() => setIsSoundboardOpen(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
             >
               <Sparkles size={16} style={{ color: 'var(--accent-warning)' }} />
               Soundboard
@@ -239,20 +255,27 @@ export default function VoiceRoomArea() {
           const speaking = isMe ? isSpeaking : u.isSpeaking;
           const muted = isMe ? isMuted : u.isMuted;
           const deafened = isMe ? isDeafened : u.isDeafened;
+          const hasCamera = isMe ? (isCameraOn && localCameraStream) : u.isCameraOn;
 
           return (
             <div 
               key={u.userId} 
               className={`voice-card ${speaking ? 'speaking' : ''}`}
+              style={{ position: 'relative', overflow: 'hidden' }}
             >
-              <img 
-                src={u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.username}`} 
-                alt="" 
-                className="avatar" 
-              />
-              <span className="name">{u.username}</span>
+              {isMe && hasCamera ? (
+                <UserCameraVideo stream={localCameraStream} />
+              ) : (
+                <img 
+                  src={u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.username}`} 
+                  alt="" 
+                  className="avatar" 
+                />
+              )}
+              <span className="name" style={{ zIndex: 2 }}>{u.username}</span>
 
-              <div className="voice-card-status" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div className="voice-card-status" style={{ display: 'flex', alignItems: 'center', gap: 4, zIndex: 2 }}>
+                {hasCamera && <Video size={13} style={{ color: 'var(--accent-success)' }} title="Câmera Ligada" />}
                 {muted && <MicOff size={14} style={{ color: 'var(--accent-danger)' }} title="Microfone Desativado" />}
                 {deafened && <Headphones size={14} style={{ color: 'var(--accent-danger)' }} title="Áudio Desativado" />}
                 {u.isScreenSharing && (
@@ -270,5 +293,31 @@ export default function VoiceRoomArea() {
         onClose={() => setIsSoundboardOpen(false)} 
       />
     </div>
+  );
+}
+
+function UserCameraVideo({ stream }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && stream) {
+      ref.current.srcObject = stream;
+    }
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted
+      style={{
+        width: '100%',
+        height: '100%',
+        objectFit: 'cover',
+        borderRadius: 'var(--radius-md)',
+        position: 'absolute',
+        top: 0,
+        left: 0
+      }}
+    />
   );
 }

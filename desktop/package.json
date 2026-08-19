@@ -11,6 +11,7 @@
     "build:renderer": "vite build",
     "build": "vite build",
     "start": "electron .",
+    "dist:win": "vite build && electron-builder --win --x64",
     "package:win": "vite build && electron-builder --win --x64"
   },
   "build": {

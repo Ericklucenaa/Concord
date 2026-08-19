@@ -14,7 +14,8 @@ import {
   X, 
   Plus, 
   Heart,
-  SmilePlus
+  SmilePlus,
+  Search
 } from 'lucide-react';
 import { SOCKET_EVENTS, ROLES } from '@shared/constants';
 import { 
@@ -26,6 +27,7 @@ import {
 import EmojiPickerPopover from './EmojiPickerPopover';
 import ImageLightboxModal from './ImageLightboxModal';
 import { useNotification } from '../context/NotificationContext';
+import { showNativeNotification } from '../services/notificationService';
 
 const QUICK_REACTIONS = ['❤️', '😂', '🔥', '👍', '🎉'];
 
@@ -44,6 +46,8 @@ export default function ChatArea({ onToggleMemberList }) {
   const [selectedLightboxImage, setSelectedLightboxImage] = useState(null);
   const [typingUsers, setTypingUsers] = useState(new Set());
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -52,6 +56,22 @@ export default function ChatArea({ onToggleMemberList }) {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  // Global Ctrl + F search hotkey
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+      }
+      if (e.key === 'Escape' && isSearchOpen) {
+        setIsSearchOpen(false);
+        setSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSearchOpen]);
 
   // Load message history when activeChannel changes
   useEffect(() => {
@@ -77,7 +97,19 @@ export default function ChatArea({ onToggleMemberList }) {
         setIsLoadingMessages(true);
         unsubscribeCloud = listenToMessagesFromCloud(activeChannel.id, (cloudMsgs) => {
           if (isMounted) {
-            setMessages(cloudMsgs || []);
+            setMessages((prevMsgs) => {
+              if (prevMsgs.length > 0 && cloudMsgs && cloudMsgs.length > prevMsgs.length) {
+                const latest = cloudMsgs[cloudMsgs.length - 1];
+                if (String(latest.userId) !== String(user?.id)) {
+                  showNativeNotification(`#${activeChannel?.name || 'conversa'} (${activeServer?.name || 'Concord'})`, {
+                    body: `${latest.username}: ${latest.content || (latest.imageUrl ? 'Enviou uma imagem' : 'Nova mensagem')}`,
+                    icon: latest.avatar,
+                    tag: `chan_${activeChannel.id}`
+                  });
+                }
+              }
+              return cloudMsgs || [];
+            });
             setIsLoadingMessages(false);
             setTimeout(scrollToBottom, 50);
           }
@@ -475,14 +507,46 @@ export default function ChatArea({ onToggleMemberList }) {
           <span className="chat-header-desc">Canal de texto de {activeServer?.name}</span>
         </div>
 
-        <button 
-          className="icon-btn" 
-          onClick={onToggleMemberList}
-          title="Alternar Lista de Membros"
-        >
-          <Users size={20} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button 
+            className={`icon-btn ${isSearchOpen ? 'active' : ''}`}
+            onClick={() => setIsSearchOpen(!isSearchOpen)}
+            title="Pesquisar Mensagens (Ctrl + F)"
+          >
+            <Search size={18} />
+          </button>
+          <button 
+            className="icon-btn" 
+            onClick={onToggleMemberList}
+            title="Alternar Lista de Membros"
+          >
+            <Users size={20} />
+          </button>
+        </div>
       </header>
+
+      {/* Ctrl + F Search Bar */}
+      {isSearchOpen && (
+        <div style={{ padding: '8px 16px', backgroundColor: 'var(--bg-tertiary)', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Search size={15} style={{ color: 'var(--text-muted)' }} />
+          <input 
+            type="text"
+            placeholder={`Pesquisar em #${activeChannel?.name || 'chat'}...`}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 13, outline: 'none' }}
+            autoFocus
+          />
+          {searchQuery && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {messages.filter(m => (m.content || '').toLowerCase().includes(searchQuery.toLowerCase()) || (m.username || '').toLowerCase().includes(searchQuery.toLowerCase())).length} resultados
+            </span>
+          )}
+          <button className="icon-btn" onClick={() => { setIsSearchOpen(false); setSearchQuery(''); }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Messages List */}
       <div className="chat-messages">
@@ -490,14 +554,16 @@ export default function ChatArea({ onToggleMemberList }) {
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 40 }}>
             Carregando mensagens...
           </div>
-        ) : messages.length === 0 ? (
+        ) : (searchQuery ? messages.filter(m => (m.content || '').toLowerCase().includes(searchQuery.toLowerCase()) || (m.username || '').toLowerCase().includes(searchQuery.toLowerCase())) : messages).length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 40 }}>
             <Hash size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-            <h3>Bem-vindo ao início de #{activeChannel?.name}!</h3>
-            <p style={{ fontSize: 13, marginTop: 4 }}>Este é o início da conversa neste canal. Envie mensagens, fotos e emojis!</p>
+            <h3>{searchQuery ? 'Nenhum resultado encontrado' : `Bem-vindo ao início de #${activeChannel?.name}!`}</h3>
+            <p style={{ fontSize: 13, marginTop: 4 }}>
+              {searchQuery ? 'Tente buscar por outro termo ou autor.' : 'Este é o início da conversa neste canal. Envie mensagens, fotos e emojis!'}
+            </p>
           </div>
         ) : (
-          messages.map((msg) => {
+          (searchQuery ? messages.filter(m => (m.content || '').toLowerCase().includes(searchQuery.toLowerCase()) || (m.username || '').toLowerCase().includes(searchQuery.toLowerCase())) : messages).map((msg) => {
             const isMe = msg.userId === user?.id;
             const canDelete = isMe || isStaff;
             const formattedTime = new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

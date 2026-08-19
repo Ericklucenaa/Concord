@@ -31,6 +31,16 @@ service cloud.firestore {
     match /concord_messages/{messageId} {
       allow read, write: if true;
     }
+
+    // Direct Messages (1-on-1 private chat)
+    match /concord_direct_messages/{messageId} {
+      allow read, write: if true;
+    }
+
+    // Friendships & Friend Requests
+    match /concord_friends/{friendId} {
+      allow read, write: if true;
+    }
     
     // Realtime Voice Room Presence
     match /concord_voice_rooms/{roomId} {

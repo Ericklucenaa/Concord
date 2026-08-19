@@ -77,17 +77,32 @@ export default function ServerSidebar() {
 
   return (
     <aside className="server-sidebar">
-      {/* Pending Invites / Home */}
+      {/* Home / Direct Messages */}
       <div 
         className={`server-icon-wrapper ${!activeServer ? 'active' : ''}`}
-        title="Caixa de Entrada & Convites"
+        title="Mensagens Diretas & Amigos"
+      >
+        <div className="server-pill" />
+        <button 
+          className="server-btn"
+          onClick={() => setActiveServer(null)}
+          style={{ backgroundColor: !activeServer ? 'var(--accent-primary)' : 'var(--bg-secondary)', color: !activeServer ? '#fff' : 'var(--accent-primary)' }}
+        >
+          <Compass size={24} />
+        </button>
+      </div>
+
+      {/* Pending Invites Inbox */}
+      <div 
+        className="server-icon-wrapper"
+        title="Caixa de Convites Recebidos"
       >
         <div className="server-pill" />
         <button 
           className="server-btn"
           onClick={() => openModal('pendingInvites')}
         >
-          <Mail size={22} />
+          <Mail size={20} />
           {pendingInvites.length > 0 && (
             <span className="badge-counter">{pendingInvites.length}</span>
           )}
