@@ -395,12 +395,14 @@ export function ServerProvider({ children }) {
       } catch (err) {}
     }
 
+    const DEFAULT_APP_ICON = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='26' fill='url(%23g)'/><circle cx='50' cy='50' r='12' fill='%23ffffff'/><path d='M 30 50 A 20 20 0 0 1 70 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/><path d='M 20 50 A 30 30 0 0 1 80 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' opacity='0.6'/></svg>";
+
     const newId = 'srv-' + Date.now();
     const newServer = {
       id: newId,
       name: serverData.name.trim(),
       description: serverData.description?.trim() || '',
-      icon: serverData.icon || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(serverData.name)}`,
+      icon: serverData.icon || DEFAULT_APP_ICON,
       ownerId: user?.id || 'owner',
       role: 'owner',
       channels: [

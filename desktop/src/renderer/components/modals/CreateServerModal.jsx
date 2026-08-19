@@ -2,12 +2,14 @@ import React, { useState, useRef } from 'react';
 import { useServer } from '../../context/ServerContext';
 import { X, Sparkles, LogIn, Upload, RefreshCw, Camera, Image as ImageIcon } from 'lucide-react';
 
+const DEFAULT_APP_ICON = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='26' fill='url(%23g)'/><circle cx='50' cy='50' r='12' fill='%23ffffff'/><path d='M 30 50 A 20 20 0 0 1 70 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/><path d='M 20 50 A 30 30 0 0 1 80 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' opacity='0.6'/></svg>";
+
 export default function CreateServerModal() {
   const { modalState, closeModal, createServer, joinByCode } = useServer();
   const [tab, setTab] = useState('create'); // 'create' or 'join'
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [icon, setIcon] = useState('https://api.dicebear.com/7.x/identicon/svg?seed=ConcordCommunity');
+  const [icon, setIcon] = useState(DEFAULT_APP_ICON);
   const [inviteCode, setInviteCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -38,8 +40,7 @@ export default function CreateServerModal() {
   };
 
   const handleRandomIcon = () => {
-    const seed = Math.random().toString(36).substring(7);
-    setIcon(`https://api.dicebear.com/7.x/identicon/svg?seed=${seed}`);
+    setIcon(DEFAULT_APP_ICON);
   };
 
   const handleCreate = async (e) => {
@@ -52,13 +53,13 @@ export default function CreateServerModal() {
       await createServer({
         name: name.trim(),
         description: description.trim(),
-        icon
+        icon: icon || DEFAULT_APP_ICON
       });
 
       closeModal('createServer');
       setName('');
       setDescription('');
-      setIcon('https://api.dicebear.com/7.x/identicon/svg?seed=ConcordCommunity');
+      setIcon(DEFAULT_APP_ICON);
     } catch (err) {
       setError(err.message || 'Erro ao criar servidor.');
     } finally {
