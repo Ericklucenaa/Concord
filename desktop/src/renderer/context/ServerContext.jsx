@@ -63,35 +63,35 @@ export function ServerProvider({ children }) {
 
   const refreshServers = useCallback(async () => {
     if (!isAuthenticated) return;
+    if (api.hasBackend()) {
+      try {
+        setIsLoadingServers(true);
+        const data = await api.getServers();
+        if (data?.servers && data.servers.length > 0) {
+          setServers(data.servers);
+          setActiveServer((prev) => {
+            if (!prev) return data.servers[0];
+            const exists = data.servers.find((s) => s.id === prev.id);
+            return exists || data.servers[0];
+          });
+          return data.servers;
+        }
+      } catch (err) {}
+    }
+
     try {
       setIsLoadingServers(true);
-      const data = await api.getServers();
-      if (data?.servers && data.servers.length > 0) {
-        setServers(data.servers);
-        setActiveServer((prev) => {
-          if (!prev) return data.servers[0];
-          const exists = data.servers.find((s) => s.id === prev.id);
-          return exists || data.servers[0];
-        });
-        return data.servers;
-      }
-      throw new Error('No servers from backend API');
-    } catch (err) {
       // Cloud Firestore + LocalStorage sync
       let combinedServers = [];
       let storedLocal = [];
       let cloudServers = [];
       try {
         cloudServers = await getUserServersFromCloud(user?.id, user?.username);
-      } catch (cloudErr) {
-        console.warn('Cloud server sync note:', cloudErr);
-      }
+      } catch (cloudErr) {}
 
       try {
         storedLocal = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
-      } catch (e) {
-        console.warn('Error reading local storage:', e);
-      }
+      } catch (e) {}
 
       const serverMap = new Map();
       cloudServers.forEach((s) => serverMap.set(String(s.id), s));
@@ -155,64 +155,68 @@ export function ServerProvider({ children }) {
 
   const refreshServerDetails = useCallback(async (serverId) => {
     if (!serverId) return;
-    try {
-      const data = await api.getServer(serverId);
-      if (data.server) {
-        setServerMembers(data.server.members || []);
-        setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...data.server } : data.server));
-        if (data.server.channels?.length > 0) {
-          setActiveChannel((prev) => {
-            if (prev && data.server.channels.some((c) => c.id === prev.id)) return prev;
-            return data.server.channels[0];
-          });
-        }
-        return;
-      }
-    } catch (err) {
-      // Cloud fallback
+    if (api.hasBackend()) {
       try {
-        const cloudServer = await getServerFromCloud(serverId);
-        if (cloudServer) {
-          setServerMembers(cloudServer.members || []);
-          setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...cloudServer } : cloudServer));
-          if (cloudServer.channels?.length > 0) {
+        const data = await api.getServer(serverId);
+        if (data?.server) {
+          setServerMembers(data.server.members || []);
+          setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...data.server } : data.server));
+          if (data.server.channels?.length > 0) {
             setActiveChannel((prev) => {
-              if (prev && cloudServer.channels.some((c) => c.id === prev.id)) return prev;
-              return cloudServer.channels[0];
+              if (prev && data.server.channels.some((c) => c.id === prev.id)) return prev;
+              return data.server.channels[0];
             });
           }
+          return;
         }
-      } catch (e) {}
+      } catch (err) {}
     }
+
+    // Cloud fallback
+    try {
+      const cloudServer = await getServerFromCloud(serverId);
+      if (cloudServer) {
+        setServerMembers(cloudServer.members || []);
+        setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...cloudServer } : cloudServer));
+        if (cloudServer.channels?.length > 0) {
+          setActiveChannel((prev) => {
+            if (prev && cloudServer.channels.some((c) => c.id === prev.id)) return prev;
+            return cloudServer.channels[0];
+          });
+        }
+      }
+    } catch (e) {}
   }, []);
 
   const refreshPendingInvites = useCallback(async () => {
     if (!isAuthenticated || !user?.username) return;
-    try {
-      const data = await api.getPendingInvites();
-      if (data?.invites) {
-        setPendingInvites(data.invites);
-        return;
-      }
-    } catch (err) {
-      // Cloud + local invites
+    if (api.hasBackend()) {
       try {
-        const cloudInvites = await getPendingInvitesFromCloud(user.username);
-        const myNick = (user.username || '').toLowerCase().replace(/^@/, '');
-        const stored = localStorage.getItem(`concord_invites_${myNick}`);
-        const localList = stored ? JSON.parse(stored) : [];
+        const data = await api.getPendingInvites();
+        if (data?.invites) {
+          setPendingInvites(data.invites);
+          return;
+        }
+      } catch (err) {}
+    }
 
-        const inviteMap = new Map();
-        cloudInvites.forEach((i) => inviteMap.set(i.id || i.code, i));
-        localList.forEach((i) => {
-          const key = i.id || i.code;
-          if (!inviteMap.has(key)) inviteMap.set(key, i);
-        });
+    // Cloud + local invites
+    try {
+      const cloudInvites = await getPendingInvitesFromCloud(user.username);
+      const myNick = (user.username || '').toLowerCase().replace(/^@/, '');
+      const stored = localStorage.getItem(`concord_invites_${myNick}`);
+      const localList = stored ? JSON.parse(stored) : [];
 
-        setPendingInvites(Array.from(inviteMap.values()));
-      } catch (e) {
-        setPendingInvites([]);
-      }
+      const inviteMap = new Map();
+      cloudInvites.forEach((i) => inviteMap.set(i.id || i.code, i));
+      localList.forEach((i) => {
+        const key = i.id || i.code;
+        if (!inviteMap.has(key)) inviteMap.set(key, i);
+      });
+
+      setPendingInvites(Array.from(inviteMap.values()));
+    } catch (e) {
+      setPendingInvites([]);
     }
   }, [isAuthenticated, user?.username]);
 
@@ -341,243 +345,246 @@ export function ServerProvider({ children }) {
       socket.off(SOCKET_EVENTS.CHANNEL_DELETED);
       socket.off(SOCKET_EVENTS.INVITE_RECEIVED);
     };
-  }, [socket, activeServer?.id, refreshPendingInvites]);
-
-  const createServer = async (serverData) => {
-    try {
-      const data = await api.createServer(serverData);
-      await refreshServers();
-      if (data.server) {
-        setActiveServer(data.server);
-        saveServerToCloud(data.server);
-      }
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API createServer not reachable, creating cloud & local server:', apiErr);
-      const newId = 'srv-' + Date.now();
-      const newServer = {
-        id: newId,
-        name: serverData.name.trim(),
-        description: serverData.description?.trim() || '',
-        icon: serverData.icon || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(serverData.name)}`,
-        ownerId: user?.id || 'owner',
-        role: 'owner',
-        channels: [
-          { id: 'ch-' + Date.now() + '-1', serverId: newId, name: 'geral', type: 'text', isPrivate: false },
-          { id: 'ch-' + Date.now() + '-2', serverId: newId, name: 'Sala Geral', type: 'voice', isPrivate: false }
-        ],
-        members: user ? [
-          {
-            id: String(user.id),
-            username: user.username,
-            avatar: user.avatar,
-            status: 'online',
-            role: 'owner'
-          }
-        ] : [],
-        createdAt: new Date().toISOString()
-      };
-
-      saveServerToCloud(newServer);
-
-      setServers((prev) => {
-        const next = [...prev, newServer];
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-
-      setActiveServer(newServer);
-      setActiveChannel(newServer.channels[0]);
-      setServerMembers(newServer.members);
-      return { server: newServer };
+  }, [socket, activeServer?.id, refreshPendingInvites]);  const createServer = async (serverData) => {
+    if (api.hasBackend()) {
+      try {
+        const data = await api.createServer(serverData);
+        await refreshServers();
+        if (data?.server) {
+          setActiveServer(data.server);
+          saveServerToCloud(data.server);
+        }
+        return data;
+      } catch (err) {}
     }
+
+    const newId = 'srv-' + Date.now();
+    const newServer = {
+      id: newId,
+      name: serverData.name.trim(),
+      description: serverData.description?.trim() || '',
+      icon: serverData.icon || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(serverData.name)}`,
+      ownerId: user?.id || 'owner',
+      role: 'owner',
+      channels: [
+        { id: 'ch-' + Date.now() + '-1', serverId: newId, name: 'geral', type: 'text', isPrivate: false },
+        { id: 'ch-' + Date.now() + '-2', serverId: newId, name: 'Sala Geral', type: 'voice', isPrivate: false }
+      ],
+      members: user ? [
+        {
+          id: String(user.id),
+          username: user.username,
+          avatar: user.avatar,
+          status: 'online',
+          role: 'owner'
+        }
+      ] : [],
+      createdAt: new Date().toISOString()
+    };
+
+    saveServerToCloud(newServer);
+
+    setServers((prev) => {
+      const next = [...prev, newServer];
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+
+    setActiveServer(newServer);
+    setActiveChannel(newServer.channels[0]);
+    setServerMembers(newServer.members);
+    return { server: newServer };
   };
 
   const updateServer = async (serverId, serverData) => {
-    try {
-      const data = await api.updateServer(serverId, serverData);
-      await refreshServerDetails(serverId);
-      await refreshServers();
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API updateServer not reachable, updating space:', apiErr);
-      let updatedServer = null;
-
-      setActiveServer((prev) => {
-        if (!prev || prev.id !== serverId) return prev;
-        updatedServer = {
-          ...prev,
-          name: serverData.name !== undefined ? serverData.name.trim() : prev.name,
-          description: serverData.description !== undefined ? serverData.description : prev.description,
-          icon: serverData.icon !== undefined ? serverData.icon : prev.icon
-        };
-        saveServerToCloud(updatedServer);
-        return updatedServer;
-      });
-
-      setServers((prev) => {
-        const next = prev.map((s) => {
-          if (s.id !== serverId) return s;
-          return {
-            ...s,
-            name: serverData.name !== undefined ? serverData.name.trim() : s.name,
-            description: serverData.description !== undefined ? serverData.description : s.description,
-            icon: serverData.icon !== undefined ? serverData.icon : s.icon
-          };
-        });
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-
-      return {
-        message: 'Servidor atualizado com sucesso!',
-        server: updatedServer
-      };
+    if (api.hasBackend()) {
+      try {
+        const data = await api.updateServer(serverId, serverData);
+        await refreshServerDetails(serverId);
+        await refreshServers();
+        return data;
+      } catch (err) {}
     }
+
+    let updatedServer = null;
+
+    setActiveServer((prev) => {
+      if (!prev || prev.id !== serverId) return prev;
+      updatedServer = {
+        ...prev,
+        name: serverData.name !== undefined ? serverData.name.trim() : prev.name,
+        description: serverData.description !== undefined ? serverData.description : prev.description,
+        icon: serverData.icon !== undefined ? serverData.icon : prev.icon
+      };
+      saveServerToCloud(updatedServer);
+      return updatedServer;
+    });
+
+    setServers((prev) => {
+      const next = prev.map((s) => {
+        if (s.id !== serverId) return s;
+        return {
+          ...s,
+          name: serverData.name !== undefined ? serverData.name.trim() : s.name,
+          description: serverData.description !== undefined ? serverData.description : s.description,
+          icon: serverData.icon !== undefined ? serverData.icon : s.icon
+        };
+      });
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+
+    return {
+      message: 'Servidor atualizado com sucesso!',
+      server: updatedServer
+    };
   };
 
   const createChannel = async (serverId, channelData) => {
-    try {
-      const data = await api.createChannel(serverId, channelData);
-      await refreshServerDetails(serverId);
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API createChannel not reachable, creating local channel:', apiErr);
-      const cleanName = channelData.type === 'text' 
-        ? channelData.name.trim().toLowerCase().replace(/\s+/g, '-')
-        : channelData.name.trim();
-
-      const newCh = {
-        id: 'ch-' + Date.now(),
-        serverId,
-        name: cleanName,
-        type: channelData.type || 'text',
-        isPrivate: Boolean(channelData.isPrivate)
-      };
-
-      setActiveServer((prev) => {
-        if (!prev || prev.id !== serverId) return prev;
-        const updated = {
-          ...prev,
-          channels: [...(prev.channels || []), newCh]
-        };
-        saveServerToCloud(updated);
-        return updated;
-      });
-
-      setServers((prev) => {
-        const next = prev.map((s) => s.id === serverId ? { ...s, channels: [...(s.channels || []), newCh] } : s);
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-
-      return { channel: newCh };
+    if (api.hasBackend()) {
+      try {
+        const data = await api.createChannel(serverId, channelData);
+        await refreshServerDetails(serverId);
+        return data;
+      } catch (err) {}
     }
+
+    const cleanName = channelData.type === 'text' 
+      ? channelData.name.trim().toLowerCase().replace(/\s+/g, '-')
+      : channelData.name.trim();
+
+    const newCh = {
+      id: 'ch-' + Date.now(),
+      serverId,
+      name: cleanName,
+      type: channelData.type || 'text',
+      isPrivate: Boolean(channelData.isPrivate)
+    };
+
+    setActiveServer((prev) => {
+      if (!prev || prev.id !== serverId) return prev;
+      const updated = {
+        ...prev,
+        channels: [...(prev.channels || []), newCh]
+      };
+      saveServerToCloud(updated);
+      return updated;
+    });
+
+    setServers((prev) => {
+      const next = prev.map((s) => s.id === serverId ? { ...s, channels: [...(s.channels || []), newCh] } : s);
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+
+    return { channel: newCh };
   };
 
   const deleteServer = async (serverId) => {
-    try {
-      await api.deleteServer(serverId);
-      await refreshServers();
-    } catch (apiErr) {
-      console.warn('Backend API deleteServer not reachable, removing space:', apiErr);
-      setServers((prev) => {
-        const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-      setActiveServer(null);
-      setActiveChannel(null);
+    if (api.hasBackend()) {
+      try {
+        await api.deleteServer(serverId);
+        await refreshServers();
+        return;
+      } catch (err) {}
     }
+
+    setServers((prev) => {
+      const next = prev.filter((s) => s.id !== serverId);
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+    setActiveServer(null);
+    setActiveChannel(null);
   };
 
   const leaveServer = async (serverId) => {
-    try {
-      await api.leaveServer(serverId);
-      await refreshServers();
-    } catch (apiErr) {
-      console.warn('Backend API leaveServer not reachable, removing space:', apiErr);
-      setServers((prev) => {
-        const next = prev.filter((s) => s.id !== serverId);
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-      setActiveServer(null);
-      setActiveChannel(null);
+    if (api.hasBackend()) {
+      try {
+        await api.leaveServer(serverId);
+        await refreshServers();
+        return;
+      } catch (err) {}
     }
+
+    setServers((prev) => {
+      const next = prev.filter((s) => s.id !== serverId);
+      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+      return next;
+    });
+    setActiveServer(null);
+    setActiveChannel(null);
   };
 
   const createInvite = async (serverId, inviteData) => {
-    try {
-      return await api.createInvite(serverId, inviteData);
-    } catch (apiErr) {
-      console.warn('Backend API createInvite not reachable, creating real cloud invite:', apiErr);
-      
-      const targetServer = servers.find((s) => s.id === serverId) || activeServer;
-      if (!targetServer) {
-        throw new Error('Servidor não encontrado.');
-      }
-
-      let receiverUser = null;
-      if (inviteData?.username) {
-        const cleanTarget = inviteData.username.trim().replace(/^@/, '');
-        if (!cleanTarget) {
-          throw new Error('Informe o apelido do usuário para convidar.');
-        }
-
-        if (user?.username && cleanTarget.toLowerCase() === user.username.toLowerCase()) {
-          throw new Error('Você não pode enviar um convite para o seu próprio apelido.');
-        }
-
-        receiverUser = await findUserByNicknameInCloud(cleanTarget);
-        if (!receiverUser) {
-          throw new Error(`O apelido @${cleanTarget} não existe. Verifique se digitou corretamente.`);
-        }
-      }
-
-      const code = Math.random().toString(36).substring(2, 10).toUpperCase();
-      
-      const newInvite = {
-        id: 'inv-' + Date.now(),
-        serverId: targetServer.id,
-        serverName: targetServer.name,
-        serverIcon: targetServer.icon,
-        serverDescription: targetServer.description || '',
-        senderUsername: user?.username || 'admin',
-        receiverUsername: receiverUser ? receiverUser.username : (inviteData?.username ? inviteData.username.replace(/^@/, '') : null),
-        code,
-        status: 'pending',
-        channelId: inviteData?.channelId || null,
-        createdAt: new Date().toISOString()
-      };
-
-      // Save invite and server to Firestore cloud (wrapped in try-catch to allow local success even if offline/blocked)
+    if (api.hasBackend()) {
       try {
-        await saveInviteToCloud(newInvite);
-        await saveServerToCloud(targetServer);
-      } catch (cloudErr) {
-        console.warn('Could not save invite/server to cloud Firestore:', cloudErr);
-      }
-
-      if (newInvite.receiverUsername) {
-        const targetNick = newInvite.receiverUsername.toLowerCase();
-        try {
-          const key = `concord_invites_${targetNick}`;
-          const current = JSON.parse(localStorage.getItem(key) || '[]');
-          current.push(newInvite);
-          localStorage.setItem(key, JSON.stringify(current));
-          window.dispatchEvent(new Event('concord:invite_created'));
-        } catch (e) {}
-      }
-
-      return {
-        message: newInvite.receiverUsername 
-          ? `Convite enviado com sucesso para a caixa de mensagens de @${newInvite.receiverUsername}!` 
-          : 'Link de convite gerado com sucesso!',
-        invite: newInvite,
-        code
-      };
+        return await api.createInvite(serverId, inviteData);
+      } catch (err) {}
     }
+
+    const targetServer = servers.find((s) => s.id === serverId) || activeServer;
+    if (!targetServer) {
+      throw new Error('Servidor não encontrado.');
+    }
+
+    let receiverUser = null;
+    if (inviteData?.username) {
+      const cleanTarget = inviteData.username.trim().replace(/^@/, '');
+      if (!cleanTarget) {
+        throw new Error('Informe o apelido do usuário para convidar.');
+      }
+
+      if (user?.username && cleanTarget.toLowerCase() === user.username.toLowerCase()) {
+        throw new Error('Você não pode enviar um convite para o seu próprio apelido.');
+      }
+
+      receiverUser = await findUserByNicknameInCloud(cleanTarget);
+      if (!receiverUser) {
+        throw new Error(`O apelido @${cleanTarget} não existe. Verifique se digitou corretamente.`);
+      }
+    }
+
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    
+    const newInvite = {
+      id: 'inv-' + Date.now(),
+      serverId: targetServer.id,
+      serverName: targetServer.name,
+      serverIcon: targetServer.icon,
+      serverDescription: targetServer.description || '',
+      senderUsername: user?.username || 'admin',
+      receiverUsername: receiverUser ? receiverUser.username : (inviteData?.username ? inviteData.username.replace(/^@/, '') : null),
+      code,
+      status: 'pending',
+      channelId: inviteData?.channelId || null,
+      createdAt: new Date().toISOString()
+    };
+
+    // Save invite and server to Firestore cloud
+    try {
+      await saveInviteToCloud(newInvite);
+      await saveServerToCloud(targetServer);
+    } catch (cloudErr) {}
+
+    if (newInvite.receiverUsername) {
+      const targetNick = newInvite.receiverUsername.toLowerCase();
+      try {
+        const key = `concord_invites_${targetNick}`;
+        const current = JSON.parse(localStorage.getItem(key) || '[]');
+        current.push(newInvite);
+        localStorage.setItem(key, JSON.stringify(current));
+        window.dispatchEvent(new Event('concord:invite_created'));
+      } catch (e) {}
+    }
+
+    return {
+      message: newInvite.receiverUsername 
+        ? `Convite enviado com sucesso para a caixa de mensagens de @${newInvite.receiverUsername}!` 
+        : 'Link de convite gerado com sucesso!',
+      invite: newInvite,
+      code
+    };
   };
 
   const joinByCode = async (code) => {
@@ -587,112 +594,111 @@ export function ServerProvider({ children }) {
 
     const cleanCode = code.trim().toUpperCase();
 
-    try {
-      const data = await api.joinByCode(cleanCode);
-      const updatedServers = await refreshServers();
-      if (data && data.serverId && updatedServers) {
-        const s = updatedServers.find((serv) => serv.id === data.serverId);
-        if (s) {
-          setActiveServer(s);
-          if (s.channels?.length > 0) {
-            const chan = s.channels.find((c) => c.id === data.channelId) || s.channels.find((c) => c.type === 'text') || s.channels[0];
-            setActiveChannel(chan);
+    if (api.hasBackend()) {
+      try {
+        const data = await api.joinByCode(cleanCode);
+        const updatedServers = await refreshServers();
+        if (data && data.serverId && updatedServers) {
+          const s = updatedServers.find((serv) => serv.id === data.serverId);
+          if (s) {
+            setActiveServer(s);
+            if (s.channels?.length > 0) {
+              const chan = s.channels.find((c) => c.id === data.channelId) || s.channels.find((c) => c.type === 'text') || s.channels[0];
+              setActiveChannel(chan);
+            }
           }
         }
-      }
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API joinByCode not reachable, searching cloud invite:', apiErr);
-      
-      // Look up real server in Firestore cloud
-      const cloudData = await getInviteByCodeFromCloud(cleanCode);
-      
-      if (cloudData && cloudData.server) {
-        const realServer = cloudData.server;
-        const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
-
-        setServers((prev) => {
-          const filtered = prev.filter((s) => s.id !== joinedServer.id);
-          const next = [...filtered, joinedServer];
-          try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-          return next;
-        });
-
-        setActiveServer(joinedServer);
-        if (joinedServer.channels?.length > 0) {
-          const targetChan = joinedServer.channels.find((c) => c.id === cloudData.invite?.channelId);
-          const firstText = joinedServer.channels.find((c) => c.type === 'text');
-          setActiveChannel(targetChan || firstText || joinedServer.channels[0]);
-        }
-
-        return { 
-          message: `Você entrou no servidor "${joinedServer.name}"!`, 
-          server: joinedServer 
-        };
-      }
-
-      // Check local storage for invite code
-      const localServers = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
-      const matching = localServers.find((s) => s.inviteCodes?.includes(cleanCode) || s.id === cleanCode);
-      
-      if (matching) {
-        setActiveServer(matching);
-        if (matching.channels?.length > 0) setActiveChannel(matching.channels[0]);
-        return { message: `Você entrou no servidor "${matching.name}"!`, server: matching };
-      }
-
-      throw new Error('Código de convite inválido ou servidor não encontrado.');
+        return data;
+      } catch (err) {}
     }
+
+    // Look up real server in Firestore cloud
+    const cloudData = await getInviteByCodeFromCloud(cleanCode);
+    
+    if (cloudData && cloudData.server) {
+      const realServer = cloudData.server;
+      const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
+
+      setServers((prev) => {
+        const filtered = prev.filter((s) => s.id !== joinedServer.id);
+        const next = [...filtered, joinedServer];
+        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
+
+      setActiveServer(joinedServer);
+      if (joinedServer.channels?.length > 0) {
+        const targetChan = joinedServer.channels.find((c) => c.id === cloudData.invite?.channelId);
+        const firstText = joinedServer.channels.find((c) => c.type === 'text');
+        setActiveChannel(targetChan || firstText || joinedServer.channels[0]);
+      }
+
+      return { 
+        message: `Você entrou no servidor "${joinedServer.name}"!`, 
+        server: joinedServer 
+      };
+    }
+
+    // Check local storage for invite code
+    const localServers = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
+    const matching = localServers.find((s) => s.inviteCodes?.includes(cleanCode) || s.id === cleanCode);
+    
+    if (matching) {
+      setActiveServer(matching);
+      if (matching.channels?.length > 0) setActiveChannel(matching.channels[0]);
+      return { message: `Você entrou no servidor "${matching.name}"!`, server: matching };
+    }
+
+    throw new Error('Código de convite inválido ou servidor não encontrado.');
   };
 
   const respondInvite = async (inviteId, action) => {
-    try {
-      const data = await api.respondInvite(inviteId, action);
-      await refreshPendingInvites();
-      await refreshServers();
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API respondInvite not reachable:', apiErr);
-      const inviteToProcess = pendingInvites.find((i) => i.id === inviteId || i.code === inviteId);
-
-      await respondInviteInCloud(inviteId, action, user);
-
-      // Remove from user's pending invites list in localStorage
+    if (api.hasBackend()) {
       try {
-        const myNick = (user?.username || '').toLowerCase().replace(/^@/, '');
-        const key = `concord_invites_${myNick}`;
-        const current = JSON.parse(localStorage.getItem(key) || '[]');
-        const filtered = current.filter((i) => i.id !== inviteId && i.code !== inviteId);
-        localStorage.setItem(key, JSON.stringify(filtered));
-      } catch (e) {}
-
-      setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId && i.code !== inviteId));
-
-      if (action === 'accept' && inviteToProcess) {
-        try {
-          const realServer = await getServerFromCloud(inviteToProcess.serverId);
-          if (realServer) {
-            const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
-            setServers((prev) => {
-              const filtered = prev.filter((s) => s.id !== joinedServer.id);
-              const next = [...filtered, joinedServer];
-              try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-              return next;
-            });
-            setActiveServer(joinedServer);
-            if (joinedServer.channels?.length > 0) {
-              const firstText = joinedServer.channels.find((c) => c.type === 'text');
-              setActiveChannel(firstText || joinedServer.channels[0]);
-            }
-            return { message: `Você entrou no servidor "${joinedServer.name}"!`, serverId: joinedServer.id };
-          }
-        } catch (e) {
-          console.warn('Join server from invite error:', e);
-        }
-      }
-
-      return { message: action === 'accept' ? 'Convite aceito!' : 'Convite recusado.' };
+        const data = await api.respondInvite(inviteId, action);
+        await refreshPendingInvites();
+        await refreshServers();
+        return data;
+      } catch (err) {}
     }
+
+    const inviteToProcess = pendingInvites.find((i) => i.id === inviteId || i.code === inviteId);
+
+    await respondInviteInCloud(inviteId, action, user);
+
+    // Remove from user's pending invites list in localStorage
+    try {
+      const myNick = (user?.username || '').toLowerCase().replace(/^@/, '');
+      const key = `concord_invites_${myNick}`;
+      const current = JSON.parse(localStorage.getItem(key) || '[]');
+      const filtered = current.filter((i) => i.id !== inviteId && i.code !== inviteId);
+      localStorage.setItem(key, JSON.stringify(filtered));
+    } catch (e) {}
+
+    setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId && i.code !== inviteId));
+
+    if (action === 'accept' && inviteToProcess) {
+      try {
+        const realServer = await getServerFromCloud(inviteToProcess.serverId);
+        if (realServer) {
+          const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
+          setServers((prev) => {
+            const filtered = prev.filter((s) => s.id !== joinedServer.id);
+            const next = [...filtered, joinedServer];
+            try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
+            return next;
+          });
+          setActiveServer(joinedServer);
+          if (joinedServer.channels?.length > 0) {
+            const firstText = joinedServer.channels.find((c) => c.type === 'text');
+            setActiveChannel(firstText || joinedServer.channels[0]);
+          }
+          return { message: `Você entrou no servidor "${joinedServer.name}"!`, serverId: joinedServer.id };
+        }
+      } catch (e) {}
+    }
+
+    return { message: action === 'accept' ? 'Convite aceito!' : 'Convite recusado.' };
   };
 
   return (

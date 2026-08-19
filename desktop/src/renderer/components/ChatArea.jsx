@@ -40,10 +40,9 @@ export default function ChatArea({ onToggleMemberList }) {
           setTimeout(scrollToBottom, 50);
         }
       } catch (err) {
-        console.error('Failed to load channel messages via API, subscribing to Firestore:', err);
         if (isMounted) {
           unsubscribeCloud = listenToMessagesFromCloud(activeChannel.id, (cloudMsgs) => {
-            if (isMounted) {
+            if (isMounted && cloudMsgs && cloudMsgs.length > 0) {
               setMessages(cloudMsgs);
               setTimeout(scrollToBottom, 50);
             }

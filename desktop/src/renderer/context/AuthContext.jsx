@@ -12,67 +12,87 @@ import { syncUserToCloud } from '../services/cloudSync';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('concord_cached_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [token, setToken] = useState(api.getToken());
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    async function loadUser() {
-      // 1. Check if user just returned from Google sign-in redirect
+    let isMounted = true;
+
+    // 1. Listen to Firebase Auth state changes
+    const unsubscribeAuth = auth.onAuthStateChanged(async (fbUser) => {
+      if (!isMounted) return;
+
+      if (fbUser) {
+        const token = await fbUser.getIdToken().catch(() => 'fb_token_' + fbUser.uid);
+        api.setToken(token);
+        setToken(token);
+
+        let currentUserData = null;
+        try {
+          const cached = localStorage.getItem('concord_cached_user');
+          if (cached) currentUserData = JSON.parse(cached);
+        } catch (e) {}
+
+        const restoredUser = {
+          id: fbUser.uid,
+          username: currentUserData?.username || fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuário',
+          email: fbUser.email,
+          avatar: currentUserData?.avatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fbUser.email || fbUser.uid)}`,
+          status: 'online',
+          createdAt: currentUserData?.createdAt || new Date().toISOString()
+        };
+
+        setUser(restoredUser);
+        try { localStorage.setItem('concord_cached_user', JSON.stringify(restoredUser)); } catch (e) {}
+        setIsLoading(false);
+      } else {
+        // If not in Firebase Auth, check local backend API if configured
+        const storedToken = api.getToken();
+        if (storedToken && api.hasBackend()) {
+          try {
+            const data = await api.getMe();
+            if (isMounted && data && data.user) {
+              setUser(data.user);
+              try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
+              setIsLoading(false);
+              return;
+            }
+          } catch (err) {}
+        }
+
+        if (isMounted && !fbUser) {
+          const cached = localStorage.getItem('concord_cached_user');
+          if (!storedToken && !cached) {
+            setUser(null);
+          }
+          setIsLoading(false);
+        }
+      }
+    });
+
+    // 2. Check if user just returned from Google sign-in redirect
+    async function checkRedirect() {
       try {
         const redirectUser = await checkRedirectResult();
-        if (redirectUser) {
+        if (redirectUser && isMounted) {
           await loginGoogle(redirectUser);
-          setIsLoading(false);
-          return;
         }
-      } catch (err) {
-        console.warn('Redirect result check error:', err);
-      }
-
-      // 2. Check stored token
-      const storedToken = api.getToken();
-      if (!storedToken || storedToken === 'undefined' || storedToken === 'null') {
-        api.setToken(null);
-        setToken(null);
-        setUser(null);
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        const data = await api.getMe();
-        if (data && data.user) {
-          setUser(data.user);
-          setToken(storedToken);
-        } else {
-          throw new Error('Resposta de usuário inválida');
-        }
-      } catch (err) {
-        console.warn('Could not fetch user from backend API, checking Firebase session:', err);
-        if (auth.currentUser) {
-          const u = auth.currentUser;
-          const restoredUser = {
-            id: u.uid,
-            username: u.displayName || u.email?.split('@')[0] || 'Usuário',
-            email: u.email,
-            avatar: u.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(u.email || u.uid)}`,
-            status: 'online',
-            createdAt: new Date().toISOString()
-          };
-          setUser(restoredUser);
-          setToken(storedToken);
-        } else {
-          api.setToken(null);
-          setToken(null);
-          setUser(null);
-        }
-      } finally {
-        setIsLoading(false);
-      }
+      } catch (err) {}
     }
+    checkRedirect();
 
-    loadUser();
+    return () => {
+      isMounted = false;
+      unsubscribeAuth();
+    };
   }, []);
 
   useEffect(() => {

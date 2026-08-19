@@ -46,9 +46,7 @@ export async function syncUserToCloud(user) {
         updatedAt: new Date().toISOString()
       }, { merge: true });
     }
-  } catch (err) {
-    console.warn('Cloud user sync notice:', err);
-  }
+  } catch (err) {}
 }
 
 export async function findUserByNicknameInCloud(nickname) {
@@ -70,9 +68,7 @@ export async function findUserByNicknameInCloud(nickname) {
     if (!querySnapshot.empty) {
       return querySnapshot.docs[0].data();
     }
-  } catch (err) {
-    console.warn('Cloud nickname lookup notice:', err);
-  }
+  } catch (err) {}
   return null;
 }
 
@@ -99,9 +95,7 @@ export async function saveServerToCloud(server) {
       inviteCodes: server.inviteCodes || [],
       updatedAt: new Date().toISOString()
     }, { merge: true });
-  } catch (err) {
-    console.warn('Cloud save server notice:', err);
-  }
+  } catch (err) {}
 }
 
 export async function getServerFromCloud(serverId) {
@@ -112,9 +106,7 @@ export async function getServerFromCloud(serverId) {
     if (snap.exists()) {
       return snap.data();
     }
-  } catch (err) {
-    console.warn('Cloud get server notice:', err);
-  }
+  } catch (err) {}
   return null;
 }
 
@@ -136,9 +128,7 @@ export async function getUserServersFromCloud(userId, username) {
         result.push(data);
       }
     });
-  } catch (err) {
-    console.warn('Cloud get user servers notice:', err);
-  }
+  } catch (err) {}
   return result;
 }
 
@@ -165,9 +155,7 @@ export async function saveInviteToCloud(invite) {
         createdAt: new Date().toISOString()
       }, { merge: true });
     }
-  } catch (err) {
-    console.warn('Cloud save invite notice:', err);
-  }
+  } catch (err) {}
 }
 
 export async function getInviteByCodeFromCloud(code) {
@@ -184,9 +172,7 @@ export async function getInviteByCodeFromCloud(code) {
         server: realServer
       };
     }
-  } catch (err) {
-    console.warn('Cloud get invite notice:', err);
-  }
+  } catch (err) {}
   return null;
 }
 
@@ -216,7 +202,6 @@ export async function joinServerInCloud(serverId, currentUser) {
 
     return serverData;
   } catch (err) {
-    console.warn('Cloud join server notice:', err);
     return null;
   }
 }
@@ -235,9 +220,7 @@ export async function getPendingInvitesFromCloud(username) {
     querySnapshot.forEach((docSnap) => {
       list.push(docSnap.data());
     });
-  } catch (err) {
-    console.warn('Cloud get pending invites notice:', err);
-  }
+  } catch (err) {}
   return list;
 }
 
@@ -252,9 +235,7 @@ export async function respondInviteInCloud(inviteId, action, currentUser) {
     } else {
       await deleteDoc(userInviteRef);
     }
-  } catch (err) {
-    console.warn('Cloud respond invite notice:', err);
-  }
+  } catch (err) {}
 }
 
 export async function saveMessageToCloud(channelId, message) {
@@ -266,9 +247,7 @@ export async function saveMessageToCloud(channelId, message) {
       channelId: String(channelId),
       createdAt: message.createdAt || new Date().toISOString()
     });
-  } catch (err) {
-    console.warn('Cloud save message notice:', err);
-  }
+  } catch (err) {}
 }
 
 export function listenToMessagesFromCloud(channelId, callback) {
@@ -286,10 +265,9 @@ export function listenToMessagesFromCloud(channelId, callback) {
       });
       callback(messages);
     }, (err) => {
-      console.warn('Cloud listen messages error:', err);
+      // Handled silently when offline or adblocked
     });
   } catch (err) {
-    console.warn('Cloud listen messages init error:', err);
     return () => {};
   }
 }
@@ -300,7 +278,7 @@ export async function joinVoiceInCloud(channelId, userInfo) {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
     const snap = await getDoc(roomRef);
     let users = [];
-    if (snap.exists()) {
+    if (snap && snap.exists()) {
       users = snap.data().users || [];
     }
     // Filter out existing entries for this user
@@ -308,10 +286,10 @@ export async function joinVoiceInCloud(channelId, userInfo) {
     users.push(userInfo);
     await setDoc(roomRef, { users, updatedAt: new Date().toISOString() });
     
-    // Also trigger global event so UI knows
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
   } catch (err) {
-    console.warn('Cloud join voice notice:', err);
+    // Local fallback event
+    window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [userInfo] } }));
   }
 }
 
@@ -320,7 +298,7 @@ export async function leaveVoiceInCloud(channelId, userId) {
   try {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
     const snap = await getDoc(roomRef);
-    if (snap.exists()) {
+    if (snap && snap.exists()) {
       let users = snap.data().users || [];
       users = users.filter((u) => String(u.userId) !== String(userId));
       if (users.length === 0) {
@@ -331,7 +309,7 @@ export async function leaveVoiceInCloud(channelId, userId) {
       window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
     }
   } catch (err) {
-    console.warn('Cloud leave voice notice:', err);
+    window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [] } }));
   }
 }
 
@@ -340,14 +318,15 @@ export function listenToVoiceRoomInCloud(channelId, callback) {
   try {
     const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
     return onSnapshot(roomRef, (snap) => {
-      if (snap.exists()) {
+      if (snap && snap.exists()) {
         callback(snap.data().users || []);
       } else {
         callback([]);
       }
+    }, (err) => {
+      // Handled silently
     });
   } catch (err) {
-    console.warn('Cloud listen voice room error:', err);
     return () => {};
   }
 }

@@ -3,20 +3,20 @@ function getApiBase() {
     return import.meta.env.VITE_API_URL;
   }
   if (typeof window !== 'undefined') {
-    const { hostname, protocol } = window.location;
+    const { hostname } = window.location;
     // When running locally on dev server or localhost
     if (hostname === 'localhost' || hostname === '127.0.0.1' || !hostname) {
       return 'http://localhost:4000';
     }
-    if (protocol === 'http:' || protocol === 'https:') {
-      return window.location.origin;
-    }
+    // Hosted static web (Firebase Hosting, Vercel, etc.) without an explicit backend API:
+    // Mark as null so the app uses Firestore CloudSync & Firebase Auth directly without 404s.
+    return null;
   }
   return 'http://localhost:4000';
 }
 
 const API_BASE = getApiBase();
-const API_URL = API_BASE.endsWith('/api') ? API_BASE : `${API_BASE}/api`;
+const API_URL = API_BASE ? (API_BASE.endsWith('/api') ? API_BASE : `${API_BASE}/api`) : null;
 
 class ApiService {
   getToken() {
@@ -32,7 +32,15 @@ class ApiService {
     }
   }
 
+  hasBackend() {
+    return Boolean(API_URL);
+  }
+
   async request(endpoint, options = {}) {
+    if (!API_URL) {
+      throw new Error('Backend indisponível (modo offline).');
+    }
+
     const token = this.getToken();
     const headers = {
       'Content-Type': 'application/json',
@@ -66,7 +74,6 @@ class ApiService {
 
       return data;
     } catch (error) {
-      console.warn(`[API Notice] ${endpoint}:`, error.message || error);
       throw error;
     }
   }

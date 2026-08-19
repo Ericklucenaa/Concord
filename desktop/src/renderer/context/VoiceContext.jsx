@@ -39,13 +39,13 @@ export function VoiceProvider({ children }) {
   useEffect(() => {
     async function loadIceConfig() {
       try {
-        const config = await api.getWebRTCConfig();
-        if (config.iceServers && config.iceServers.length > 0) {
-          iceServersRef.current = config.iceServers;
+        if (api.hasBackend()) {
+          const config = await api.getWebRTCConfig();
+          if (config.iceServers && config.iceServers.length > 0) {
+            iceServersRef.current = config.iceServers;
+          }
         }
-      } catch (err) {
-        console.warn('Using default ICE servers:', err);
-      }
+      } catch (err) {}
     }
     loadIceConfig();
   }, []);

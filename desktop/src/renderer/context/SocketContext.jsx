@@ -10,18 +10,16 @@ function getSocketUrl() {
     return import.meta.env.VITE_SOCKET_URL;
   }
   if (import.meta.env.VITE_API_URL) {
-    // Fall back to the same host used for the REST API, since the Socket.IO
-    // server always runs alongside the HTTP API in this project.
     return import.meta.env.VITE_API_URL.replace(/\/api\/?$/, '');
   }
   if (typeof window !== 'undefined') {
-    const { hostname, origin } = window.location;
+    const { hostname } = window.location;
     if (hostname === 'localhost' || hostname === '127.0.0.1' || !hostname) {
       return 'http://localhost:4000';
     }
-    // Hosted web build without an explicit backend URL configured at build time:
-    // assume the API/Socket.IO server is reachable on the same origin (reverse proxy).
-    return origin;
+    // Hosted static web (Firebase Hosting, Vercel, GitHub Pages) without an explicit backend:
+    // Do not attempt to connect WebSocket to the static hosting domain.
+    return null;
   }
   return 'http://localhost:4000';
 }
@@ -53,6 +51,10 @@ export function SocketProvider({ children }) {
 
     socketInstance.on('connect', () => {
       setIsConnected(true);
+    });
+
+    socketInstance.on('connect_error', () => {
+      setIsConnected(false);
     });
 
     socketInstance.on('disconnect', () => {

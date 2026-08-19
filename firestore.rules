@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User Profiles
+    match /concord_users/{userId} {
+      allow read, write: if true;
+    }
+    
+    // Nicknames registry for uniqueness and lookup
+    match /concord_nicknames/{nickname} {
+      allow read, write: if true;
+    }
+    
+    // Servers & Channels
+    match /concord_servers/{serverId} {
+      allow read, write: if true;
+    }
+    
+    // Public & Code Invites
+    match /concord_invites/{code} {
+      allow read, write: if true;
+    }
+    
+    // User Targeted Direct Invites (Inbox)
+    match /concord_user_invites/{inviteId} {
+      allow read, write: if true;
+    }
+    
+    // Messages in text channels
+    match /concord_messages/{messageId} {
+      allow read, write: if true;
+    }
+    
+    // Realtime Voice Room Presence
+    match /concord_voice_rooms/{roomId} {
+      allow read, write: if true;
+    }
+    
+    // Default fallback
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
