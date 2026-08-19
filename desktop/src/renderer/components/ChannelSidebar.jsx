@@ -53,6 +53,7 @@ export default function ChannelSidebar() {
     isScreenSharing, 
     setIsPickerOpen, 
     stopScreenShare, 
+    watchStream,
     activePresenter 
   } = useScreenShare();
 

@@ -3,7 +3,11 @@ import { useSocket } from './SocketContext';
 import { useAuth } from './AuthContext';
 import { useVoice } from './VoiceContext';
 import { useServer } from './ServerContext';
-import { updateVoiceScreenSharingInCloud } from '../services/cloudSync';
+import { 
+  updateVoiceScreenSharingInCloud, 
+  sendScreenSignalInCloud, 
+  listenToScreenSignalsInCloud 
+} from '../services/cloudSync';
 import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
 
 const ScreenShareContext = createContext(null);
@@ -33,6 +37,46 @@ export function ScreenShareProvider({ children }) {
         return { width: 1920, height: 1080 };
       default:
         return { width: 1920, height: 1080 };
+    }
+  };
+
+  // Create Peer Connection and send Screen Offer
+  const createAndSendScreenOffer = async (targetUserId, channelId, stream) => {
+    try {
+      const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+      screenPeerConnectionsRef.current.set(targetUserId, pc);
+
+      // Add screen video tracks
+      stream.getVideoTracks().forEach((track) => {
+        pc.addTrack(track, stream);
+      });
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          if (socket && socket.connected) {
+            socket.emit(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE, {
+              targetUserId,
+              channelId,
+              candidate: event.candidate
+            });
+          }
+          sendScreenSignalInCloud(channelId, user?.id, targetUserId, 'candidate', event.candidate);
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      if (socket && socket.connected) {
+        socket.emit(SOCKET_EVENTS.SCREEN_OFFER, {
+          targetUserId,
+          channelId,
+          offer
+        });
+      }
+      sendScreenSignalInCloud(channelId, user?.id, targetUserId, 'offer', offer);
+    } catch (err) {
+      console.error(`Error sending screen offer to ${targetUserId}:`, err);
     }
   };
 
@@ -123,12 +167,12 @@ export function ScreenShareProvider({ children }) {
           quality: screenQuality,
           fps: screenFps
         });
+      }
 
-        // Send screen video track offer to all participants in voice room
-        for (const remoteUser of voiceUsers) {
-          if (remoteUser.userId === user?.id) continue;
-          createAndSendScreenOffer(remoteUser.userId, currentVoice.id, stream);
-        }
+      // Send screen video track offer to all participants in voice room
+      for (const remoteUser of voiceUsers) {
+        if (remoteUser.userId === user?.id) continue;
+        createAndSendScreenOffer(remoteUser.userId, currentVoice.id, stream);
       }
     } catch (err) {
       if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
@@ -136,40 +180,6 @@ export function ScreenShareProvider({ children }) {
       }
       console.error('Error starting screen share:', err);
       alert('Não foi possível iniciar a transmissão de tela.');
-    }
-  };
-
-  // Create Peer Connection and send Screen Offer
-  const createAndSendScreenOffer = async (targetUserId, channelId, stream) => {
-    try {
-      const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-      screenPeerConnectionsRef.current.set(targetUserId, pc);
-
-      // Add screen video tracks
-      stream.getVideoTracks().forEach((track) => {
-        pc.addTrack(track, stream);
-      });
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate && socket) {
-          socket.emit(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE, {
-            targetUserId,
-            channelId,
-            candidate: event.candidate
-          });
-        }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      socket.emit(SOCKET_EVENTS.SCREEN_OFFER, {
-        targetUserId,
-        channelId,
-        offer
-      });
-    } catch (err) {
-      console.error(`Error sending screen offer to ${targetUserId}:`, err);
     }
   };
 
@@ -204,11 +214,12 @@ export function ScreenShareProvider({ children }) {
 
   const watchStream = (presenterUser, channel) => {
     if (!presenterUser) return;
-    if (channel && (!activeVoiceChannel || activeVoiceChannel.id !== channel.id)) {
-      joinVoice(channel);
+    const targetChannel = channel || activeVoiceChannel;
+    if (targetChannel && (!activeVoiceChannel || activeVoiceChannel.id !== targetChannel.id)) {
+      joinVoice(targetChannel);
     }
-    if (channel && setActiveChannel) {
-      setActiveChannel(channel);
+    if (targetChannel && setActiveChannel) {
+      setActiveChannel(targetChannel);
     }
     setActivePresenter({
       userId: presenterUser.userId,
@@ -216,7 +227,87 @@ export function ScreenShareProvider({ children }) {
       quality: screenQuality,
       fps: screenFps
     });
+
+    // Notify presenter via Firestore that a viewer is ready to receive stream
+    if (user?.id && presenterUser.userId && targetChannel?.id) {
+      sendScreenSignalInCloud(targetChannel.id, user.id, presenterUser.userId, 'viewer_ready', {});
+    }
   };
+
+  // Listen to Firestore WebRTC signals for pure Cloud/Hosting mode
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const unsubSignals = listenToScreenSignalsInCloud(user.id, async ({ fromUserId, type, data, channelId }) => {
+      // 1. If we are the presenter and a viewer is ready, send them an offer
+      if (type === 'viewer_ready') {
+        if (isScreenSharing && localStreamRef.current) {
+          createAndSendScreenOffer(fromUserId, channelId || activeVoiceChannel?.id, localStreamRef.current);
+        }
+      }
+
+      // 2. If we receive an offer from presenter
+      if (type === 'offer') {
+        try {
+          const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+          screenPeerConnectionsRef.current.set(fromUserId, pc);
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendScreenSignalInCloud(channelId, user.id, fromUserId, 'candidate', event.candidate);
+            }
+          };
+
+          pc.ontrack = (event) => {
+            const [remoteStream] = event.streams;
+            if (remoteStream) {
+              setRemoteScreenStreams((prev) => {
+                const next = new Map(prev);
+                next.set(fromUserId, remoteStream);
+                return next;
+              });
+            }
+          };
+
+          await pc.setRemoteDescription(new RTCSessionDescription(data));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          sendScreenSignalInCloud(channelId, user.id, fromUserId, 'answer', answer);
+        } catch (err) {
+          console.error('Error handling cloud screen offer:', err);
+        }
+      }
+
+      // 3. If presenter receives an answer from viewer
+      if (type === 'answer') {
+        try {
+          const pc = screenPeerConnectionsRef.current.get(fromUserId);
+          if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data));
+          }
+        } catch (err) {
+          console.error('Error handling cloud screen answer:', err);
+        }
+      }
+
+      // 4. If either receives an ICE candidate
+      if (type === 'candidate') {
+        try {
+          const pc = screenPeerConnectionsRef.current.get(fromUserId);
+          if (pc && data) {
+            await pc.addIceCandidate(new RTCIceCandidate(data));
+          }
+        } catch (err) {
+          console.warn('Error adding cloud screen candidate:', err);
+        }
+      }
+    });
+
+    return () => {
+      if (unsubSignals) unsubSignals();
+    };
+  }, [user?.id, isScreenSharing, activeVoiceChannel?.id]);
 
   // Clean up if leaving voice
   useEffect(() => {

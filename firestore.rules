@@ -36,6 +36,14 @@ service cloud.firestore {
     match /concord_voice_rooms/{roomId} {
       allow read, write: if true;
     }
+
+    // Realtime WebRTC Screen and Voice Signaling
+    match /concord_screen_signals/{signalId} {
+      allow read, write: if true;
+    }
+    match /concord_voice_signals/{signalId} {
+      allow read, write: if true;
+    }
     
     // Default fallback
     match /{document=**} {

@@ -453,3 +453,50 @@ export function listenToUserPresenceInCloud(callback) {
     return () => {};
   }
 }
+
+export async function sendScreenSignalInCloud(channelId, fromUserId, toUserId, type, data) {
+  if (!fromUserId || !toUserId || !type) return;
+  try {
+    const signalId = `${fromUserId}_${toUserId}_${type}_${Date.now()}`;
+    const signalRef = doc(firestore, 'concord_screen_signals', signalId);
+    await setDoc(signalRef, {
+      channelId: String(channelId || ''),
+      fromUserId: String(fromUserId),
+      toUserId: String(toUserId),
+      type,
+      data: JSON.stringify(data),
+      createdAt: Date.now()
+    });
+  } catch (err) {}
+}
+
+export function listenToScreenSignalsInCloud(myUserId, callback) {
+  if (!myUserId) return () => {};
+  try {
+    const q = query(
+      collection(firestore, 'concord_screen_signals'),
+      where('toUserId', '==', String(myUserId))
+    );
+    return onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const docData = change.doc.data();
+          if (docData && docData.data) {
+            try {
+              const parsedData = JSON.parse(docData.data);
+              callback({
+                fromUserId: docData.fromUserId,
+                type: docData.type,
+                data: parsedData,
+                channelId: docData.channelId
+              });
+              deleteDoc(change.doc.ref).catch(() => {});
+            } catch (e) {}
+          }
+        }
+      });
+    }, (err) => {});
+  } catch (err) {
+    return () => {};
+  }
+}
