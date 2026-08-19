@@ -918,3 +918,46 @@ export function listenToVoiceSignalsInCloud(channelId, myUserId, onSignal) {
     return () => {};
   }
 }
+
+/**
+ * =========================================================================
+ * APP VERSION & AUTO-UPDATE SYSTEM
+ * =========================================================================
+ */
+
+export async function getLatestAppVersionFromCloud() {
+  try {
+    const docRef = doc(firestore, 'concord_app_version', 'latest');
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return snap.data();
+    }
+  } catch (err) {}
+  return null;
+}
+
+export async function publishAppVersionToCloud(versionInfo) {
+  if (!versionInfo || !versionInfo.version) return;
+  try {
+    const docRef = doc(firestore, 'concord_app_version', 'latest');
+    await setDoc(docRef, {
+      ...versionInfo,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  } catch (err) {
+    console.warn('Error publishing app version to cloud:', err);
+  }
+}
+
+export function listenToAppVersionInCloud(callback) {
+  try {
+    const docRef = doc(firestore, 'concord_app_version', 'latest');
+    return onSnapshot(docRef, (snap) => {
+      if (snap.exists()) {
+        callback(snap.data());
+      }
+    }, () => {});
+  } catch (err) {
+    return () => {};
+  }
+}

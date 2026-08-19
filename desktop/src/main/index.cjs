@@ -75,6 +75,12 @@ ipcMain.handle('window:close', () => {
   if (mainWindow) mainWindow.close();
 });
 
+ipcMain.handle('app:open-external', (_, url) => {
+  if (url && (url.startsWith('http:') || url.startsWith('https:'))) {
+    shell.openExternal(url);
+  }
+});
+
 // Desktop Capturer for Screen & Window Share
 ipcMain.handle('desktop:get-sources', async () => {
   try {

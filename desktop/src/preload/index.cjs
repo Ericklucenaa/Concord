@@ -14,5 +14,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDesktopSources: () => ipcRenderer.invoke('desktop:get-sources'),
 
   // Native Google OAuth for Desktop App
-  signInWithGoogleNative: () => ipcRenderer.invoke('auth:google-login')
+  signInWithGoogleNative: () => ipcRenderer.invoke('auth:google-login'),
+
+  // Open external URL in system browser
+  openExternal: (url) => ipcRenderer.invoke('app:open-external', url)
 });

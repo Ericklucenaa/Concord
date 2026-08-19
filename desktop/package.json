@@ -12,7 +12,8 @@
     "build": "vite build",
     "start": "electron .",
     "dist:win": "vite build && electron-builder --win --x64",
-    "package:win": "vite build && electron-builder --win --x64"
+    "package:win": "vite build && electron-builder --win --x64",
+    "publish:version": "node publish_version.js"
   },
   "build": {
     "appId": "com.concord.app",

@@ -25,6 +25,7 @@ import PendingInvitesModal from './components/modals/PendingInvitesModal';
 import ScreenSharePickerModal from './components/modals/ScreenSharePickerModal';
 import SettingsModal from './components/modals/SettingsModal';
 import ServerSettingsModal from './components/modals/ServerSettingsModal';
+import UpdateNotificationModal from './components/modals/UpdateNotificationModal';
 
 import AuthPage from './pages/AuthPage';
 import { useScreenShare } from './context/ScreenShareContext';
@@ -169,6 +170,7 @@ function MainAppContent() {
         <ScreenSharePickerModal />
         <SettingsModal />
         <ServerSettingsModal />
+        <UpdateNotificationModal />
       </ErrorBoundary>
     </div>
   );
