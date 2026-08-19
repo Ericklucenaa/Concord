@@ -397,6 +397,12 @@ export async function joinVoiceInCloud(channelId, userInfo) {
     if (snap && snap.exists()) {
       users = snap.data().users || [];
     }
+
+    const cleanUserInfo = {
+      ...userInfo,
+      lastSeen: Date.now()
+    };
+
     // Filter out existing entries for this user by userId or username
     users = users.filter((u) => {
       if (!u) return false;
@@ -404,13 +410,65 @@ export async function joinVoiceInCloud(channelId, userInfo) {
       if (userInfo.username && u.username && u.username.toLowerCase() === userInfo.username.toLowerCase()) return false;
       return true;
     });
-    users.push(userInfo);
+    users.push(cleanUserInfo);
     await setDoc(roomRef, { users, updatedAt: new Date().toISOString() }, { merge: true });
     
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users } }));
   } catch (err) {
     window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users: [userInfo] } }));
   }
+}
+
+export async function sendVoiceHeartbeatInCloud(channelId, userId, username) {
+  if (!channelId || !userId) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    if (snap && snap.exists()) {
+      let users = snap.data().users || [];
+      let found = false;
+      const now = Date.now();
+      users = users.map((u) => {
+        if (String(u.userId) === String(userId) || (username && u.username === username)) {
+          found = true;
+          return { ...u, lastSeen: now };
+        }
+        return u;
+      });
+      if (found) {
+        await setDoc(roomRef, { users, updatedAt: new Date().toISOString() }, { merge: true });
+      }
+    }
+  } catch (err) {}
+}
+
+export async function kickUserFromVoiceInCloud(channelId, targetUserId, targetUsername) {
+  if (!channelId || (!targetUserId && !targetUsername)) return;
+  try {
+    const roomRef = doc(firestore, 'concord_voice_rooms', String(channelId));
+    const snap = await getDoc(roomRef);
+    if (snap && snap.exists()) {
+      let users = snap.data().users || [];
+      users = users.filter((u) => {
+        if (!u) return false;
+        if (targetUserId && String(u.userId) === String(targetUserId)) return false;
+        if (targetUsername && u.username && u.username.toLowerCase() === targetUsername.toLowerCase()) return false;
+        return true;
+      });
+
+      let activePresenter = snap.data().activePresenter || null;
+      if (activePresenter && (String(activePresenter.userId) === String(targetUserId) || activePresenter.username === targetUsername)) {
+        activePresenter = null;
+      }
+
+      if (users.length === 0) {
+        await deleteDoc(roomRef);
+      } else {
+        await setDoc(roomRef, { users, activePresenter, updatedAt: new Date().toISOString() });
+      }
+      window.dispatchEvent(new CustomEvent('concord:voice_update', { detail: { channelId, users, activePresenter } }));
+    }
+  } catch (err) {}
 }
 
 export async function leaveVoiceInCloud(channelId, userId, username) {
@@ -509,13 +567,28 @@ export function listenToVoiceRoomInCloud(channelId, callback) {
     return onSnapshot(roomRef, (snap) => {
       if (snap && snap.exists()) {
         const data = snap.data();
-        callback(data.users || [], data.activePresenter || null);
+        const rawUsers = data.users || [];
+        const now = Date.now();
+
+        // Filter out stale users who disconnected or closed app without clean exit (timeout > 35s)
+        const activeUsers = rawUsers.filter((u) => {
+          if (!u) return false;
+          if (u.lastSeen && (now - Number(u.lastSeen) > 35000)) {
+            return false;
+          }
+          return true;
+        });
+
+        // If stale users were detected, purge them from Firestore document
+        if (activeUsers.length !== rawUsers.length) {
+          setDoc(roomRef, { users: activeUsers, updatedAt: new Date().toISOString() }, { merge: true }).catch(() => {});
+        }
+
+        callback(activeUsers, data.activePresenter || null);
       } else {
         callback([], null);
       }
-    }, (err) => {
-      // Handled silently
-    });
+    }, (err) => {});
   } catch (err) {
     return () => {};
   }
@@ -529,7 +602,7 @@ export async function setUserPresenceInCloud(userId, username, status = 'online'
       id: String(userId),
       username: username || 'Usuário',
       status: status,
-      lastSeen: new Date().toISOString()
+      lastSeen: Date.now()
     }, { merge: true });
   } catch (err) {}
 }
@@ -539,12 +612,27 @@ export function listenToUserPresenceInCloud(callback) {
     const q = collection(firestore, 'concord_users');
     return onSnapshot(q, (snapshot) => {
       const statusMap = new Map();
+      const now = Date.now();
+
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         if (data && data.id) {
-          statusMap.set(String(data.id), data.status || 'offline');
+          const rawLastSeen = data.lastSeen;
+          let isRecentlyActive = false;
+
+          if (typeof rawLastSeen === 'number') {
+            isRecentlyActive = (now - rawLastSeen) < 45000;
+          } else if (typeof rawLastSeen === 'string') {
+            const timeDiff = now - new Date(rawLastSeen).getTime();
+            isRecentlyActive = !isNaN(timeDiff) && timeDiff < 45000;
+          }
+
+          // User is online ONLY if they sent heartbeat within last 45s and status !== 'offline'
+          const realStatus = isRecentlyActive && data.status !== 'offline' ? (data.status || 'online') : 'offline';
+
+          statusMap.set(String(data.id), realStatus);
           if (data.username) {
-            statusMap.set(data.username.toLowerCase(), data.status || 'offline');
+            statusMap.set(data.username.toLowerCase(), realStatus);
           }
         }
       });

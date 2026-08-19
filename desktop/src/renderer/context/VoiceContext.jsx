@@ -12,7 +12,10 @@ import {
   listenToSoundboardInCloud,
   updateVoiceUserStateInCloud,
   sendVoiceSignalInCloud,
-  listenToVoiceSignalsInCloud
+  listenToVoiceSignalsInCloud,
+  sendVoiceHeartbeatInCloud,
+  kickUserFromVoiceInCloud,
+  setUserPresenceInCloud
 } from '../services/cloudSync';
 import { soundSynthesizer } from '../services/soundEffects';
 import { useNotification } from './NotificationContext';
@@ -817,11 +820,77 @@ export function VoiceProvider({ children }) {
     };
   }, [activeServer, activeVoiceChannel?.id, user?.id, user?.username]);
 
+  // Disconnect / Kick user from voice channel (Admin or offline/stuck purge)
+  const kickUserFromVoice = async (channelId, targetUserId, targetUsername) => {
+    if (!channelId || (!targetUserId && !targetUsername)) return;
+    try {
+      await kickUserFromVoiceInCloud(channelId, targetUserId, targetUsername);
+      if (socket && socket.connected) {
+        socket.emit(SOCKET_EVENTS.VOICE_LEAVE, { channelId, targetUserId });
+      }
+      showToast(`Usuário desconectado da sala de voz.`, 'info');
+    } catch (err) {
+      console.warn('Error disconnecting user from voice:', err);
+    }
+  };
+
+  // Real-time Voice Heartbeat (every 12 seconds)
+  useEffect(() => {
+    if (!activeVoiceChannel?.id || !user?.id) return;
+    
+    // Initial heartbeat
+    sendVoiceHeartbeatInCloud(activeVoiceChannel.id, user.id, user.username);
+
+    const interval = setInterval(() => {
+      sendVoiceHeartbeatInCloud(activeVoiceChannel.id, user.id, user.username);
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [activeVoiceChannel?.id, user?.id, user?.username]);
+
+  // Real-time Global Online Presence Heartbeat (every 18 seconds)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    setUserPresenceInCloud(user.id, user.username, user.status || 'online');
+
+    const interval = setInterval(() => {
+      setUserPresenceInCloud(user.id, user.username, user.status || 'online');
+    }, 18000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        setUserPresenceInCloud(user.id, user.username, user.status || 'online');
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [user?.id, user?.username, user?.status]);
+
+  // If I was kicked or disconnected from active voice room by another user/admin
+  useEffect(() => {
+    if (!activeVoiceChannel || !user?.id || voiceUsers.length === 0) return;
+    const amIStillInRoom = voiceUsers.some(
+      (u) => String(u.userId) === String(user.id) || (user.username && u.username?.toLowerCase() === user.username.toLowerCase())
+    );
+    if (!amIStillInRoom) {
+      leaveVoice();
+      showToast('Você foi desconectado do canal de voz.', 'warning');
+    }
+  }, [voiceUsers, activeVoiceChannel, user?.id, user?.username, leaveVoice, showToast]);
+
   // Clean up voice room immediately when closing the tab/window
   useEffect(() => {
     const handleVoiceUnload = () => {
       if (activeVoiceChannel?.id && user?.id) {
         leaveVoiceInCloud(activeVoiceChannel.id, user.id, user.username);
+      }
+      if (user?.id) {
+        setUserPresenceInCloud(user.id, user.username, 'offline');
       }
     };
 
@@ -862,6 +931,7 @@ export function VoiceProvider({ children }) {
         toggleCamera,
         joinVoice,
         leaveVoice,
+        kickUserFromVoice,
         toggleMute,
         toggleDeafen,
         setUserVolume,

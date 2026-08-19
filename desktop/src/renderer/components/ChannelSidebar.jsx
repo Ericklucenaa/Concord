@@ -22,7 +22,8 @@ import {
   Radio,
   Sliders,
   X,
-  Sparkles
+  Sparkles,
+  UserX
 } from 'lucide-react';
 import { CHANNEL_TYPES, ROLES, USER_STATUS } from '@shared/constants';
 import SoundboardModal from './SoundboardModal';
@@ -46,6 +47,7 @@ export default function ChannelSidebar() {
     voiceChannelUsersMap,
     joinVoice, 
     leaveVoice, 
+    kickUserFromVoice,
     isMuted, 
     isDeafened, 
     isSpeaking,
@@ -616,6 +618,25 @@ export default function ChannelSidebar() {
                     100%
                   </button>
                 </div>
+
+                <button
+                  className="btn btn-secondary hover-danger"
+                  style={{ width: '100%', padding: '7px 10px', fontSize: 12, justifyContent: 'center', color: 'var(--accent-danger)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}
+                  onClick={async () => {
+                    const confirmed = await showConfirm(
+                      'Desconectar Usuário',
+                      `Deseja desconectar @${selectedVoiceUser.username} do canal de voz?`,
+                      { isDanger: true, confirmText: 'Desconectar' }
+                    );
+                    if (confirmed) {
+                      kickUserFromVoice(activeVoiceChannel?.id || channel.id, selectedVoiceUser.userId, selectedVoiceUser.username);
+                      setSelectedVoiceUser(null);
+                    }
+                  }}
+                >
+                  <UserX size={14} />
+                  Desconectar do Canal
+                </button>
               </div>
             ) : (
               <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>

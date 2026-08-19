@@ -16,11 +16,15 @@ import {
   Sparkles,
   Video,
   VideoOff,
-  Headphones
+  Headphones,
+  UserX,
+  PhoneOff
 } from 'lucide-react';
 import SoundboardModal from './SoundboardModal';
+import { useNotification } from '../context/NotificationContext';
 
 export default function VoiceRoomArea() {
+  const { showConfirm } = useNotification();
   const { user } = useAuth();
   const { 
     activeVoiceChannel, 
@@ -31,7 +35,8 @@ export default function VoiceRoomArea() {
     isCameraOn,
     localCameraStream,
     toggleCamera,
-    setUserVolume 
+    setUserVolume,
+    kickUserFromVoice
   } = useVoice();
   const { 
     isScreenSharing, 
@@ -273,6 +278,43 @@ export default function VoiceRoomArea() {
                 />
               )}
               <span className="name" style={{ zIndex: 2 }}>{u.username}</span>
+
+              {/* Disconnect/Kick button for remote users */}
+              {!isMe && (
+                <button
+                  className="icon-btn hover-danger"
+                  style={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    zIndex: 10,
+                    backgroundColor: 'rgba(0,0,0,0.6)',
+                    padding: '4px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    fontSize: 11,
+                    color: 'var(--accent-danger)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)'
+                  }}
+                  title="Desconectar este usuário do canal"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const confirmed = await showConfirm(
+                      'Desconectar Usuário',
+                      `Deseja desconectar @${u.username} do canal de voz?`,
+                      { isDanger: true, confirmText: 'Desconectar' }
+                    );
+                    if (confirmed && activeVoiceChannel) {
+                      kickUserFromVoice(activeVoiceChannel.id, u.userId, u.username);
+                    }
+                  }}
+                >
+                  <PhoneOff size={12} />
+                  <span style={{ fontSize: 10, fontWeight: 700 }}>Desconectar</span>
+                </button>
+              )}
 
               <div className="voice-card-status" style={{ display: 'flex', alignItems: 'center', gap: 4, zIndex: 2 }}>
                 {hasCamera && <Video size={13} style={{ color: 'var(--accent-success)' }} title="Câmera Ligada" />}

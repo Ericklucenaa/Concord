@@ -73,7 +73,7 @@ export function ServerProvider({ children }) {
         if (data?.servers && data.servers.length > 0) {
           setServers(data.servers);
           setActiveServer((prev) => {
-            if (!prev) return data.servers[0];
+            if (!prev) return null; // Keep in DMs if in DMs
             const exists = data.servers.find((s) => s.id === prev.id);
             return exists || data.servers[0];
           });
@@ -150,20 +150,24 @@ export function ServerProvider({ children }) {
 
       setServers(combinedServers);
       setActiveServer((prev) => {
-        if (!prev && combinedServers.length > 0) return combinedServers[0];
-        const exists = combinedServers.find((s) => s.id === prev?.id);
-        return exists || (combinedServers.length > 0 ? combinedServers[0] : null);
+        if (!prev) {
+          return null; // Preserve Direct Messages view if active
+        }
+        const matching = combinedServers.find((s) => s.id === prev.id);
+        if (matching) {
+          if (matching.channels?.length > 0) {
+            setActiveChannel((prevCh) => {
+              if (prevCh && matching.channels.some((c) => c.id === prevCh.id)) {
+                return matching.channels.find((c) => c.id === prevCh.id) || prevCh;
+              }
+              return matching.channels[0];
+            });
+          }
+          setServerMembers(matching.members || []);
+          return matching;
+        }
+        return combinedServers.length > 0 ? combinedServers[0] : null;
       });
-      if (combinedServers.length > 0 && combinedServers[0]?.channels?.length > 0) {
-        setActiveChannel((prev) => {
-          if (prev && combinedServers[0].channels.some((c) => c.id === prev.id)) return prev;
-          return combinedServers[0].channels[0];
-        });
-        setServerMembers(combinedServers[0]?.members || []);
-      } else {
-        setActiveChannel(null);
-        setServerMembers([]);
-      }
       return combinedServers;
     } finally {
       setIsLoadingServers(false);
