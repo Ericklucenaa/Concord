@@ -18,7 +18,9 @@ import {
   Upload,
   Camera,
   RefreshCw,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Sparkles,
+  Sliders
 } from 'lucide-react';
 import { USER_STATUS } from '@shared/constants';
 import { useNotification } from '../../context/NotificationContext';
@@ -35,7 +37,19 @@ export default function SettingsModal() {
     setSelectedInputDevice, 
     setSelectedOutputDevice,
     refreshAudioDevices,
-    micVolumeLevel
+    micVolumeLevel,
+    noiseSuppression,
+    echoCancellation,
+    autoGainControl,
+    noiseGateEnabled,
+    automaticSensitivity,
+    noiseGateThreshold,
+    updateNoiseSuppression,
+    updateEchoCancellation,
+    updateAutoGainControl,
+    updateNoiseGateEnabled,
+    updateAutomaticSensitivity,
+    updateNoiseGateThreshold
   } = useVoice();
 
   const [activeTab, setActiveTab] = useState('account'); // 'account', 'audio', 'appearance'
@@ -621,6 +635,186 @@ export default function SettingsModal() {
                           }} 
                         />
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Advanced Voice Processing & Noise Suppression Section */}
+                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 0.5 }}>
+                      Processamento Avançado de Áudio & Supressão de Ruído
+                    </div>
+
+                    {/* 1. Noise Suppression Toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(99, 102, 241, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)' }}>
+                          <ShieldCheck size={18} />
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>Supressão de Ruído de Fundo</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Filtra sons indesejados como ventiladores, teclado, trânsito e ruídos externos</div>
+                        </div>
+                      </div>
+                      <label className="switch" style={{ position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={noiseSuppression} 
+                          onChange={(e) => updateNoiseSuppression(e.target.checked)}
+                          style={{ opacity: 0, width: 0, height: 0 }}
+                        />
+                        <span 
+                          style={{
+                            position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0,
+                            backgroundColor: noiseSuppression ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                            borderRadius: 24, transition: '0.2s',
+                            border: '1px solid var(--border-color)'
+                          }}
+                        >
+                          <span 
+                            style={{
+                              position: 'absolute', height: 18, width: 18, left: noiseSuppression ? 22 : 3, bottom: 2,
+                              backgroundColor: '#fff', borderRadius: '50%', transition: '0.2s'
+                            }} 
+                          />
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* 2. Echo Cancellation Toggle */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-success)' }}>
+                          <Sparkles size={18} />
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>Cancelamento de Eco</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Elimina o eco e o retorno das caixas de som no microfone</div>
+                        </div>
+                      </div>
+                      <label className="switch" style={{ position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={echoCancellation} 
+                          onChange={(e) => updateEchoCancellation(e.target.checked)}
+                          style={{ opacity: 0, width: 0, height: 0 }}
+                        />
+                        <span 
+                          style={{
+                            position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0,
+                            backgroundColor: echoCancellation ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                            borderRadius: 24, transition: '0.2s',
+                            border: '1px solid var(--border-color)'
+                          }}
+                        >
+                          <span 
+                            style={{
+                              position: 'absolute', height: 18, width: 18, left: echoCancellation ? 22 : 3, bottom: 2,
+                              backgroundColor: '#fff', borderRadius: '50%', transition: '0.2s'
+                            }} 
+                          />
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* 3. Automatic Gain Control */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(245, 158, 11, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>
+                          <Sliders size={18} />
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>Controle Automático de Ganho</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Equilibra o volume da sua voz automaticamente em tempo real</div>
+                        </div>
+                      </div>
+                      <label className="switch" style={{ position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={autoGainControl} 
+                          onChange={(e) => updateAutoGainControl(e.target.checked)}
+                          style={{ opacity: 0, width: 0, height: 0 }}
+                        />
+                        <span 
+                          style={{
+                            position: 'absolute', cursor: 'pointer', top: 0, left: 0, right: 0, bottom: 0,
+                            backgroundColor: autoGainControl ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                            borderRadius: 24, transition: '0.2s',
+                            border: '1px solid var(--border-color)'
+                          }}
+                        >
+                          <span 
+                            style={{
+                              position: 'absolute', height: 18, width: 18, left: autoGainControl ? 22 : 3, bottom: 2,
+                              backgroundColor: '#fff', borderRadius: '50%', transition: '0.2s'
+                            }} 
+                          />
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* 4. Smart Noise Gate & Input Sensitivity */}
+                    <div style={{ padding: '14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>Sensibilidade do Microfone (Noise Gate)</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Corta automaticamente sons de respiração e ruídos abaixo do limiar</div>
+                        </div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                          <input 
+                            type="checkbox" 
+                            checked={automaticSensitivity} 
+                            onChange={(e) => updateAutomaticSensitivity(e.target.checked)}
+                            style={{ accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                          />
+                          Automático
+                        </label>
+                      </div>
+
+                      {/* Interactive Sensitivity Bar Meter (Discord Style) */}
+                      <div style={{ position: 'relative', width: '100%', height: 16, backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                        {/* Current live volume bar */}
+                        <div 
+                          style={{ 
+                            width: `${isTestingMic ? testMicLevel : micVolumeLevel}%`, 
+                            height: '100%', 
+                            backgroundColor: (isTestingMic ? testMicLevel : micVolumeLevel) >= (automaticSensitivity ? 14 : noiseGateThreshold) ? 'var(--accent-success)' : 'rgba(255,255,255,0.2)',
+                            transition: 'width 0.05s ease'
+                          }} 
+                        />
+                        {/* Visual threshold line indicator */}
+                        {!automaticSensitivity && (
+                          <div 
+                            style={{ 
+                              position: 'absolute', 
+                              top: 0, 
+                              bottom: 0, 
+                              left: `${noiseGateThreshold}%`, 
+                              width: 3, 
+                              backgroundColor: 'var(--accent-warning)',
+                              boxShadow: '0 0 6px rgba(245, 158, 11, 0.8)',
+                              zIndex: 5
+                            }} 
+                            title={`Limiar do Gate: ${noiseGateThreshold}%`}
+                          />
+                        )}
+                      </div>
+
+                      {!automaticSensitivity && (
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                            <span>Silenciar ruídos de fundo ({noiseGateThreshold}%)</span>
+                            <span>Mais sensível (0%) ← → Menos sensível (80%)</span>
+                          </div>
+                          <input 
+                            type="range" 
+                            min="1" 
+                            max="80" 
+                            value={noiseGateThreshold} 
+                            onChange={(e) => updateNoiseGateThreshold(parseInt(e.target.value, 10))}
+                            style={{ width: '100%', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

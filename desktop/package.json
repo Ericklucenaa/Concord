@@ -1,6 +1,6 @@
 {
   "name": "concord-desktop",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "author": "Concord Team",
   "description": "Concord Desktop Client for Windows",

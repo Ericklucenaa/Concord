@@ -1,9 +1,9 @@
 {
-  "version": "1.0.7",
-  "name": "Concord v1.0.7",
+  "version": "1.0.8",
+  "name": "Concord v1.0.8",
   "releaseDate": "2026-08-19",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.7/Concord.Setup.1.0.7.exe",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.8/Concord.Setup.1.0.8.exe",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Purga ativa em tempo real de usuários inativos ou desconectados em salas de voz com timeout estrito de 18s e polling contínuo de 4s.",
+  "releaseNotes": "Adição de supressão avançada de ruído de fundo, cancelamento de eco, ganho automático e gate inteligente de sensibilidade do microfone.",
   "isMandatory": false
 }

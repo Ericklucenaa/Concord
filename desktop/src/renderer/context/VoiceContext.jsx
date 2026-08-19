@@ -135,7 +135,60 @@ export function VoiceProvider({ children }) {
     }
   }, [refreshAudioDevices]);
 
-  // Audio Analyzer for Speaking Indicator
+  const [noiseSuppression, setNoiseSuppression] = useState(() => localStorage.getItem('concord_noise_suppression') !== 'false');
+  const [echoCancellation, setEchoCancellation] = useState(() => localStorage.getItem('concord_echo_cancellation') !== 'false');
+  const [autoGainControl, setAutoGainControl] = useState(() => localStorage.getItem('concord_auto_gain') !== 'false');
+  const [noiseGateEnabled, setNoiseGateEnabled] = useState(() => localStorage.getItem('concord_noise_gate') !== 'false');
+  const [automaticSensitivity, setAutomaticSensitivity] = useState(() => localStorage.getItem('concord_auto_sensitivity') !== 'false');
+  const [noiseGateThreshold, setNoiseGateThreshold] = useState(() => {
+    const saved = localStorage.getItem('concord_sensitivity_threshold');
+    return saved ? parseInt(saved, 10) : 18;
+  });
+
+  const noiseSuppressionRef = useRef(noiseSuppression);
+  const echoCancellationRef = useRef(echoCancellation);
+  const autoGainControlRef = useRef(autoGainControl);
+  const noiseGateEnabledRef = useRef(noiseGateEnabled);
+  const automaticSensitivityRef = useRef(automaticSensitivity);
+  const noiseGateThresholdRef = useRef(noiseGateThreshold);
+  const speechHangoverRef = useRef({ timer: null, isOpen: false });
+
+  useEffect(() => { noiseSuppressionRef.current = noiseSuppression; }, [noiseSuppression]);
+  useEffect(() => { echoCancellationRef.current = echoCancellation; }, [echoCancellation]);
+  useEffect(() => { autoGainControlRef.current = autoGainControl; }, [autoGainControl]);
+  useEffect(() => { noiseGateEnabledRef.current = noiseGateEnabled; }, [noiseGateEnabled]);
+  useEffect(() => { automaticSensitivityRef.current = automaticSensitivity; }, [automaticSensitivity]);
+  useEffect(() => { noiseGateThresholdRef.current = noiseGateThreshold; }, [noiseGateThreshold]);
+
+  const updateNoiseSuppression = (val) => {
+    setNoiseSuppression(val);
+    localStorage.setItem('concord_noise_suppression', String(val));
+    if (activeVoiceChannel) ensureLocalStream(true);
+  };
+  const updateEchoCancellation = (val) => {
+    setEchoCancellation(val);
+    localStorage.setItem('concord_echo_cancellation', String(val));
+    if (activeVoiceChannel) ensureLocalStream(true);
+  };
+  const updateAutoGainControl = (val) => {
+    setAutoGainControl(val);
+    localStorage.setItem('concord_auto_gain', String(val));
+    if (activeVoiceChannel) ensureLocalStream(true);
+  };
+  const updateNoiseGateEnabled = (val) => {
+    setNoiseGateEnabled(val);
+    localStorage.setItem('concord_noise_gate', String(val));
+  };
+  const updateAutomaticSensitivity = (val) => {
+    setAutomaticSensitivity(val);
+    localStorage.setItem('concord_auto_sensitivity', String(val));
+  };
+  const updateNoiseGateThreshold = (val) => {
+    setNoiseGateThreshold(val);
+    localStorage.setItem('concord_sensitivity_threshold', String(val));
+  };
+
+  // Audio Analyzer for Speaking Indicator with Noise Gate and High-pass Filter
   const startSpeakingDetector = (stream) => {
     try {
       if (audioContextRef.current) {
@@ -153,10 +206,16 @@ export function VoiceProvider({ children }) {
       const audioCtx = new AudioCtx();
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.4;
+      analyser.smoothingTimeConstant = 0.3;
+
+      // Studio-grade highpass filter to cut fan rumble, AC noise, and table bumps below 85Hz
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.setValueAtTime(85, audioCtx.currentTime);
 
       const source = audioCtx.createMediaStreamSource(stream);
-      source.connect(analyser);
+      source.connect(filter);
+      filter.connect(analyser);
 
       audioContextRef.current = audioCtx;
       analyserRef.current = analyser;
@@ -169,6 +228,7 @@ export function VoiceProvider({ children }) {
         // If user is muted, force volume to 0 and speaking to false immediately
         if (isMutedRef.current) {
           setMicVolumeLevel(0);
+          speechHangoverRef.current.isOpen = false;
           setIsSpeaking((prev) => {
             if (prev) {
               if (socket && activeVoiceChannel) {
@@ -199,7 +259,33 @@ export function VoiceProvider({ children }) {
         const normalized = Math.min(100, Math.round((average / 128) * 100));
         setMicVolumeLevel(normalized);
 
-        const speakingNow = normalized > 10;
+        // Effective threshold based on Noise Gate and Sensitivity settings
+        const effectiveThreshold = automaticSensitivityRef.current ? 14 : noiseGateThresholdRef.current;
+        const isAboveThreshold = normalized >= effectiveThreshold;
+
+        // Smart Noise Gate with natural 220ms release hangover (cuts background noise while preserving natural sentence endings)
+        if (isAboveThreshold) {
+          speechHangoverRef.current.isOpen = true;
+          if (speechHangoverRef.current.timer) {
+            clearTimeout(speechHangoverRef.current.timer);
+            speechHangoverRef.current.timer = null;
+          }
+        } else if (speechHangoverRef.current.isOpen && !speechHangoverRef.current.timer) {
+          speechHangoverRef.current.timer = setTimeout(() => {
+            speechHangoverRef.current.isOpen = false;
+            speechHangoverRef.current.timer = null;
+          }, 220);
+        }
+
+        const speakingNow = !isMutedRef.current && speechHangoverRef.current.isOpen;
+
+        // If Noise Gate is enabled, gate the transmitted track so keyboard/fans/background clicks don't leak
+        if (noiseGateEnabledRef.current && localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach((track) => {
+            track.enabled = !isMutedRef.current && (speakingNow || !noiseGateEnabledRef.current);
+          });
+        }
+
         setIsSpeaking((prev) => {
           if (prev !== speakingNow) {
             if (socket && activeVoiceChannel) {
@@ -253,9 +339,14 @@ export function VoiceProvider({ children }) {
     }
 
     try {
-      const audioConstraints = selectedInputDevice
-        ? { deviceId: { ideal: selectedInputDevice }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-        : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const audioConstraints = {
+        deviceId: selectedInputDevice ? { ideal: selectedInputDevice } : undefined,
+        echoCancellation: Boolean(echoCancellationRef.current),
+        noiseSuppression: Boolean(noiseSuppressionRef.current),
+        autoGainControl: Boolean(autoGainControlRef.current),
+        channelCount: 1,
+        sampleRate: 48000
+      };
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints,
@@ -1027,7 +1118,19 @@ export function VoiceProvider({ children }) {
         selectedOutputDevice,
         setSelectedInputDevice,
         setSelectedOutputDevice,
-        refreshAudioDevices
+        refreshAudioDevices,
+        noiseSuppression,
+        echoCancellation,
+        autoGainControl,
+        noiseGateEnabled,
+        automaticSensitivity,
+        noiseGateThreshold,
+        updateNoiseSuppression,
+        updateEchoCancellation,
+        updateAutoGainControl,
+        updateNoiseGateEnabled,
+        updateAutomaticSensitivity,
+        updateNoiseGateThreshold
       }}
     >
       {children}
