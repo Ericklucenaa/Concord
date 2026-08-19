@@ -2,8 +2,8 @@
   "version": "1.0.1",
   "name": "Concord v1.0.1",
   "releaseDate": "2026-08-19",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/latest",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Áudio WebRTC de alta fidelidade em tempo real, persistência permanente de sessão no Desktop, identificadores únicos Apelido#TAG e 6 temas visuais.",
+  "releaseNotes": "Áudio WebRTC em tempo real, persistência permanente de sessão no Desktop, apelidos com tags exclusivas e novo sistema de auto-atualização.",
   "isMandatory": false
 }
