@@ -13,6 +13,7 @@ import {
   getInviteByCodeFromCloud, 
   joinServerInCloud, 
   getPendingInvitesFromCloud, 
+  listenToPendingInvitesFromCloud,
   findUserByNicknameInCloud,
   respondInviteInCloud 
 } from '../services/cloudSync';
@@ -237,9 +238,28 @@ export function ServerProvider({ children }) {
   }, [isAuthenticated, user?.username]);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && user?.username) {
       refreshServers();
       refreshPendingInvites();
+
+      // Real-time Firestore listener for pending invites
+      const unsubCloudInvites = listenToPendingInvitesFromCloud(user.username, (cloudInvites) => {
+        const myNick = (user.username || '').toLowerCase().replace(/^@/, '');
+        const stored = localStorage.getItem(`concord_invites_${myNick}`);
+        const localList = stored ? JSON.parse(stored) : [];
+
+        const inviteMap = new Map();
+        cloudInvites.forEach((i) => {
+          const key = i.id || i.code;
+          inviteMap.set(key, i);
+        });
+        localList.forEach((i) => {
+          const key = i.id || i.code;
+          if (!inviteMap.has(key)) inviteMap.set(key, i);
+        });
+
+        setPendingInvites(Array.from(inviteMap.values()));
+      });
 
       const handleIncomingInvite = () => {
         refreshPendingInvites();
@@ -248,6 +268,7 @@ export function ServerProvider({ children }) {
       window.addEventListener('storage', handleIncomingInvite);
       window.addEventListener('concord:invite_created', handleIncomingInvite);
       return () => {
+        if (unsubCloudInvites) unsubCloudInvites();
         window.removeEventListener('storage', handleIncomingInvite);
         window.removeEventListener('concord:invite_created', handleIncomingInvite);
       };
@@ -258,7 +279,7 @@ export function ServerProvider({ children }) {
       setServerMembers([]);
       setPendingInvites([]);
     }
-  }, [isAuthenticated, refreshServers, refreshPendingInvites]);
+  }, [isAuthenticated, user?.username, refreshServers, refreshPendingInvites]);
 
   useEffect(() => {
     if (activeServer?.id) {
@@ -608,7 +629,7 @@ export function ServerProvider({ children }) {
       throw new Error('Servidor não encontrado.');
     }
 
-    let receiverUser = null;
+    let targetNickname = null;
     if (inviteData?.username) {
       const cleanTarget = inviteData.username.trim().replace(/^@/, '');
       if (!cleanTarget) {
@@ -620,12 +641,12 @@ export function ServerProvider({ children }) {
       }
 
       receiverUser = await findUserByNicknameInCloud(cleanTarget);
-      if (!receiverUser) {
-        throw new Error(`O apelido @${cleanTarget} não existe. Verifique se digitou corretamente.`);
-      }
+      targetNickname = receiverUser ? receiverUser.username : cleanTarget;
     }
 
     const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
+    const inviteLink = `${origin}/#invite=${code}`;
     
     const newInvite = {
       id: 'inv-' + Date.now(),
@@ -634,8 +655,9 @@ export function ServerProvider({ children }) {
       serverIcon: targetServer.icon,
       serverDescription: targetServer.description || '',
       senderUsername: user?.username || 'admin',
-      receiverUsername: receiverUser ? receiverUser.username : (inviteData?.username ? inviteData.username.replace(/^@/, '') : null),
+      receiverUsername: targetNickname ? targetNickname.replace(/^@/, '') : null,
       code,
+      inviteLink,
       status: 'pending',
       channelId: inviteData?.channelId || null,
       createdAt: new Date().toISOString()

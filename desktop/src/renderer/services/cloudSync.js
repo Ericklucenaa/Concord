@@ -169,27 +169,42 @@ export async function getUserServersFromCloud(userId, username) {
 export async function saveInviteToCloud(invite) {
   if (!invite || !invite.code) return;
   try {
-    const cleanCode = invite.code.toUpperCase();
-    const inviteRef = doc(firestore, 'concord_invites', cleanCode);
-    await setDoc(inviteRef, {
+    const cleanCode = invite.code.trim().toUpperCase();
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
+    const inviteLink = `${origin}/#invite=${cleanCode}`;
+
+    const inviteData = {
       ...invite,
       code: cleanCode,
-      createdAt: new Date().toISOString()
-    }, { merge: true });
+      inviteLink,
+      createdAt: invite.createdAt || new Date().toISOString()
+    };
+
+    const inviteRef = doc(firestore, 'concord_invites', cleanCode);
+    await setDoc(inviteRef, inviteData, { merge: true });
 
     // If targeted to a specific username
     if (invite.receiverUsername) {
       const cleanReceiver = invite.receiverUsername.trim().toLowerCase().replace(/^@/, '');
-      const userInviteRef = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${invite.id || cleanCode}`);
-      await setDoc(userInviteRef, {
-        ...invite,
-        code: cleanCode,
+      const inviteId = invite.id || ('inv_' + Date.now());
+      const userInviteRef1 = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${cleanCode}`);
+      const userInviteRef2 = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${inviteId}`);
+
+      const userInvitePayload = {
+        ...inviteData,
+        id: inviteId,
         receiverUsername: cleanReceiver,
-        status: 'pending',
-        createdAt: new Date().toISOString()
-      }, { merge: true });
+        status: 'pending'
+      };
+
+      await setDoc(userInviteRef1, userInvitePayload, { merge: true });
+      if (inviteId !== cleanCode) {
+        await setDoc(userInviteRef2, userInvitePayload, { merge: true }).catch(() => {});
+      }
     }
-  } catch (err) {}
+  } catch (err) {
+    console.error('Error saving invite to cloud:', err);
+  }
 }
 
 export async function getInviteByCodeFromCloud(code) {
@@ -252,22 +267,50 @@ export async function getPendingInvitesFromCloud(username) {
     );
     const querySnapshot = await getDocs(q);
     querySnapshot.forEach((docSnap) => {
-      list.push(docSnap.data());
+      list.push({ id: docSnap.id, ...docSnap.data() });
     });
   } catch (err) {}
   return list;
+}
+
+export function listenToPendingInvitesFromCloud(username, callback) {
+  if (!username) return () => {};
+  const cleanReceiver = username.trim().toLowerCase().replace(/^@/, '');
+  try {
+    const q = query(
+      collection(firestore, 'concord_user_invites'),
+      where('receiverUsername', '==', cleanReceiver),
+      where('status', '==', 'pending')
+    );
+    return onSnapshot(q, (snap) => {
+      const list = [];
+      snap.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      callback(list);
+    }, (err) => {
+      console.warn('listenToPendingInvites error:', err);
+    });
+  } catch (err) {
+    return () => {};
+  }
 }
 
 export async function respondInviteInCloud(inviteId, action, currentUser) {
   if (!inviteId) return;
   try {
     const cleanReceiver = (currentUser?.username || '').trim().toLowerCase().replace(/^@/, '');
-    const userInviteRef = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${inviteId}`);
+    const cleanCode = String(inviteId).replace(/^.*_/, '').toUpperCase();
+
+    const userInviteRef1 = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${inviteId}`);
+    const userInviteRef2 = doc(firestore, 'concord_user_invites', `${cleanReceiver}_${cleanCode}`);
     
     if (action === 'accept') {
-      await setDoc(userInviteRef, { status: 'accepted' }, { merge: true });
+      await setDoc(userInviteRef1, { status: 'accepted' }, { merge: true }).catch(() => {});
+      await setDoc(userInviteRef2, { status: 'accepted' }, { merge: true }).catch(() => {});
     } else {
-      await deleteDoc(userInviteRef);
+      await deleteDoc(userInviteRef1).catch(() => {});
+      await deleteDoc(userInviteRef2).catch(() => {});
     }
   } catch (err) {}
 }
