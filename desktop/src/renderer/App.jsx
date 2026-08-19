@@ -175,20 +175,6 @@ function MainAppContent() {
 }
 
 export default function App() {
-  const [wallpaper, setWallpaper] = useState(() => localStorage.getItem('concord_wallpaper') || '');
-  const [wallpaperOpacity, setWallpaperOpacity] = useState(() => Number(localStorage.getItem('concord_wallpaper_opacity')) || 35);
-  const [wallpaperBlur, setWallpaperBlur] = useState(() => Number(localStorage.getItem('concord_wallpaper_blur')) || 4);
-
-  useEffect(() => {
-    const handleStorage = () => {
-      setWallpaper(localStorage.getItem('concord_wallpaper') || '');
-      setWallpaperOpacity(Number(localStorage.getItem('concord_wallpaper_opacity')) || 35);
-      setWallpaperBlur(Number(localStorage.getItem('concord_wallpaper_blur')) || 4);
-    };
-    window.addEventListener('concord:wallpaper-updated', handleStorage);
-    return () => window.removeEventListener('concord:wallpaper-updated', handleStorage);
-  }, []);
-
   return (
     <NotificationProvider>
       <AuthProvider>
@@ -197,22 +183,7 @@ export default function App() {
             <DMProvider>
               <VoiceProvider>
                 <ScreenShareProvider>
-                  <div className="app-container" style={{ position: 'relative', overflow: 'hidden' }}>
-                    {wallpaper && (
-                      <div 
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          backgroundImage: `url(${wallpaper})`,
-                          backgroundSize: 'cover',
-                          backgroundPosition: 'center',
-                          opacity: wallpaperOpacity / 100,
-                          filter: `blur(${wallpaperBlur}px)`,
-                          pointerEvents: 'none',
-                          zIndex: 0
-                        }}
-                      />
-                    )}
+                  <div className="app-container">
                     <TitleBar />
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, minHeight: 0 }}>
                       <MainAppContent />

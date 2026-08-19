@@ -65,54 +65,11 @@ export default function SettingsModal() {
   const [isPlayingSoundTest, setIsPlayingSoundTest] = useState(false);
 
   const fileInputRef = useRef(null);
-  const wallpaperInputRef = useRef(null);
   const [isTestingMic, setIsTestingMic] = useState(false);
   const testStreamRef = useRef(null);
   const [testMicLevel, setTestMicLevel] = useState(0);
 
   const [theme, setTheme] = useState(() => localStorage.getItem('concord_theme') || 'dark');
-  const [wallpaper, setWallpaper] = useState(() => localStorage.getItem('concord_wallpaper') || '');
-  const [wallpaperOpacity, setWallpaperOpacity] = useState(() => Number(localStorage.getItem('concord_wallpaper_opacity')) || 40);
-  const [wallpaperBlur, setWallpaperBlur] = useState(() => Number(localStorage.getItem('concord_wallpaper_blur')) || 4);
-
-  const handleWallpaperSelect = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      showError('Arquivo muito grande', 'O papel de parede deve ter no máximo 10MB.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result;
-      if (dataUrl) {
-        setWallpaper(dataUrl);
-        localStorage.setItem('concord_wallpaper', dataUrl);
-        window.dispatchEvent(new Event('concord:wallpaper-updated'));
-        showToast('Papel de parede aplicado!', 'success');
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleRemoveWallpaper = () => {
-    setWallpaper('');
-    localStorage.removeItem('concord_wallpaper');
-    window.dispatchEvent(new Event('concord:wallpaper-updated'));
-    showToast('Papel de parede removido', 'info');
-  };
-
-  const handleUpdateOpacity = (val) => {
-    setWallpaperOpacity(val);
-    localStorage.setItem('concord_wallpaper_opacity', String(val));
-    window.dispatchEvent(new Event('concord:wallpaper-updated'));
-  };
-
-  const handleUpdateBlur = (val) => {
-    setWallpaperBlur(val);
-    localStorage.setItem('concord_wallpaper_blur', String(val));
-    window.dispatchEvent(new Event('concord:wallpaper-updated'));
-  };
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -738,92 +695,6 @@ export default function SettingsModal() {
                         <div style={{ fontSize: 11, color: '#5c5e66' }}>Tema Branco Limpo</div>
                       </div>
                     </div>
-                  </div>
-
-                  {/* Custom Wallpaper Section */}
-                  <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 16 }}>
-                    <input 
-                      type="file" 
-                      ref={wallpaperInputRef} 
-                      accept="image/*" 
-                      style={{ display: 'none' }} 
-                      onChange={handleWallpaperSelect}
-                    />
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14 }}>Papel de Parede Personalizado do App</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Defina uma imagem de fundo para o Concord</div>
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button 
-                          type="button" 
-                          className="btn btn-primary"
-                          style={{ padding: '6px 12px', fontSize: 12 }}
-                          onClick={() => wallpaperInputRef.current?.click()}
-                        >
-                          <Upload size={13} />
-                          Escolher Imagem
-                        </button>
-                        {wallpaper && (
-                          <button 
-                            type="button" 
-                            className="btn btn-secondary hover-danger"
-                            style={{ padding: '6px 12px', fontSize: 12 }}
-                            onClick={handleRemoveWallpaper}
-                          >
-                            Remover
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {wallpaper ? (
-                      <div style={{ backgroundColor: 'var(--bg-tertiary)', padding: 14, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-                          <img 
-                            src={wallpaper} 
-                            alt="Wallpaper Preview" 
-                            style={{ width: 90, height: 55, objectFit: 'cover', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}
-                          />
-                          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                                <span>Opacidade da Imagem:</span>
-                                <strong>{wallpaperOpacity}%</strong>
-                              </div>
-                              <input 
-                                type="range" 
-                                min="10" 
-                                max="100" 
-                                value={wallpaperOpacity} 
-                                onChange={(e) => handleUpdateOpacity(Number(e.target.value))}
-                                style={{ width: '100%' }}
-                              />
-                            </div>
-
-                            <div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                                <span>Desfoque (Blur):</span>
-                                <strong>{wallpaperBlur}px</strong>
-                              </div>
-                              <input 
-                                type="range" 
-                                min="0" 
-                                max="20" 
-                                value={wallpaperBlur} 
-                                onChange={(e) => handleUpdateBlur(Number(e.target.value))}
-                                style={{ width: '100%' }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ padding: '14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', textAlign: 'center', fontSize: 12, color: 'var(--text-muted)' }}>
-                        Nenhum papel de parede ativo. Clique em "Escolher Imagem" para personalizar seu fundo.
-                      </div>
-                    )}
                   </div>
                 </div>
               )}
