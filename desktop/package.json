@@ -1,6 +1,6 @@
 {
   "name": "concord-desktop",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "Concord Team",
   "description": "Concord Desktop Client for Windows",
   "main": "src/main/index.cjs",

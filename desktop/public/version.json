@@ -1,9 +1,9 @@
 {
-  "version": "1.0.3",
-  "name": "Concord v1.0.3",
+  "version": "1.0.4",
+  "name": "Concord v1.0.4",
   "releaseDate": "2026-08-19",
   "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/latest",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Sistema de presença online em tempo real com detecção de inatividade (heartbeat), opção de desconectar/expulsar usuários de canais de voz e correção da alternância involuntária de servidores.",
+  "releaseNotes": "Correção completa no subsistema de áudio: sincronização de mute/unmute instantâneo em tempo real, integridade de faixas WebRTC e isolamento de ensurdecimento (deafen).",
   "isMandatory": false
 }

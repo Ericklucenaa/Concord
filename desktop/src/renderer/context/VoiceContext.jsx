@@ -52,6 +52,17 @@ export function VoiceProvider({ children }) {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animFrameRef = useRef(null);
+  const isMutedRef = useRef(false);
+  const isDeafenedRef = useRef(false);
+
+  // Sync ref with state
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
+
+  useEffect(() => {
+    isDeafenedRef.current = isDeafened;
+  }, [isDeafened]);
 
   // Load ICE servers from backend on init
   useEffect(() => {
@@ -127,13 +138,22 @@ export function VoiceProvider({ children }) {
   // Audio Analyzer for Speaking Indicator
   const startSpeakingDetector = (stream) => {
     try {
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
 
       const audioCtx = new AudioCtx();
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.5;
+      analyser.smoothingTimeConstant = 0.4;
 
       const source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
@@ -145,6 +165,30 @@ export function VoiceProvider({ children }) {
 
       const checkVolume = () => {
         if (!analyserRef.current) return;
+
+        // If user is muted, force volume to 0 and speaking to false immediately
+        if (isMutedRef.current) {
+          setMicVolumeLevel(0);
+          setIsSpeaking((prev) => {
+            if (prev) {
+              if (socket && activeVoiceChannel) {
+                socket.emit(SOCKET_EVENTS.VOICE_SPEAKING_STATE, {
+                  channelId: activeVoiceChannel.id,
+                  isSpeaking: false
+                });
+              }
+              if (user?.id) {
+                setVoiceUsers((currentUsers) =>
+                  currentUsers.map((u) => (u.userId === user.id ? { ...u, isSpeaking: false } : u))
+                );
+              }
+            }
+            return false;
+          });
+          animFrameRef.current = requestAnimationFrame(checkVolume);
+          return;
+        }
+
         analyserRef.current.getByteFrequencyData(dataArray);
 
         let sum = 0;
@@ -195,10 +239,17 @@ export function VoiceProvider({ children }) {
   };
 
   // Ensure local mic stream is active and attached to all peer connections
-  const ensureLocalStream = async () => {
-    if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0 && localStreamRef.current.getAudioTracks()[0].readyState === 'live') {
-      localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
+  const ensureLocalStream = async (force = false) => {
+    if (!force && localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0 && localStreamRef.current.getAudioTracks()[0].readyState === 'live') {
+      localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !isMutedRef.current; });
       return localStreamRef.current;
+    }
+
+    if (localStreamRef.current) {
+      try {
+        localStreamRef.current.getTracks().forEach((t) => t.stop());
+      } catch (e) {}
+      localStreamRef.current = null;
     }
 
     try {
@@ -214,7 +265,7 @@ export function VoiceProvider({ children }) {
       localStreamRef.current = stream;
 
       stream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMuted;
+        track.enabled = !isMutedRef.current;
       });
 
       startSpeakingDetector(stream);
@@ -318,8 +369,10 @@ export function VoiceProvider({ children }) {
         audioEl.srcObject = streamToPlay;
       }
 
+      const isDeaf = isDeafenedRef.current;
       const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
-      audioEl.volume = isDeafened ? 0 : volume;
+      audioEl.muted = isDeaf || volume === 0;
+      audioEl.volume = isDeaf ? 0 : volume;
 
       const playPromise = audioEl.play();
       if (playPromise !== undefined) {
@@ -565,76 +618,105 @@ export function VoiceProvider({ children }) {
   };
 
   // Toggle Mute
-  const toggleMute = () => {
-    const myMember = serverMembers.find((m) => m.id === user?.id);
-    if (myMember?.mutedByAdmin) {
-      console.warn('Silenciado pelo administrador.');
-      return;
+  const toggleMute = async () => {
+    const nextMuted = !isMutedRef.current;
+    isMutedRef.current = nextMuted;
+    setIsMuted(nextMuted);
+
+    // 1. Instantly silence/enable local stream tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !nextMuted;
+      });
     }
 
-    setIsMuted((prev) => {
-      const next = !prev;
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = !next;
-        });
-      }
-      if (socket && activeVoiceChannel) {
-        socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
-          channelId: activeVoiceChannel.id,
-          isMuted: next,
-          isDeafened
-        });
-      }
-      if (activeVoiceChannel?.id && user?.id) {
-        updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
-          isMuted: next,
-          isDeafened,
-          username: user.username,
-          avatar: user.avatar
-        });
-      }
-      return next;
+    // 2. Instantly update all active WebRTC senders
+    peerConnectionsRef.current.forEach((pc) => {
+      pc.getSenders().forEach((sender) => {
+        if (sender.track && sender.track.kind === 'audio') {
+          sender.track.enabled = !nextMuted;
+        }
+      });
     });
+
+    // 3. If unmuting, ensure the mic stream is active and healthy
+    if (!nextMuted) {
+      if (!localStreamRef.current || !localStreamRef.current.active || localStreamRef.current.getAudioTracks().some((t) => t.readyState === 'ended')) {
+        await ensureLocalStream(true);
+      }
+    } else {
+      setIsSpeaking(false);
+      setMicVolumeLevel(0);
+    }
+
+    // 4. Broadcast mute state to socket and cloud
+    if (socket && activeVoiceChannel) {
+      socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
+        channelId: activeVoiceChannel.id,
+        isMuted: nextMuted,
+        isDeafened: isDeafenedRef.current
+      });
+    }
+    if (activeVoiceChannel?.id && user?.id) {
+      updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
+        isMuted: nextMuted,
+        isDeafened: isDeafenedRef.current,
+        username: user.username,
+        avatar: user.avatar
+      });
+    }
   };
 
   // Toggle Deafen
-  const toggleDeafen = () => {
-    setIsDeafened((prev) => {
-      const next = !prev;
-      if (next && !isMuted) {
-        setIsMuted(true);
-        if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach((track) => {
-            track.enabled = false;
-          });
-        }
-      }
+  const toggleDeafen = async () => {
+    const nextDeafened = !isDeafenedRef.current;
+    isDeafenedRef.current = nextDeafened;
+    setIsDeafened(nextDeafened);
 
-      remoteAudiosRef.current.forEach((audioEl, targetUserId) => {
-        const vol = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
-        audioEl.volume = next ? 0 : vol;
+    let effectiveMute = isMutedRef.current;
+    if (nextDeafened) {
+      effectiveMute = true;
+      isMutedRef.current = true;
+      setIsMuted(true);
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
+      }
+      peerConnectionsRef.current.forEach((pc) => {
+        pc.getSenders().forEach((sender) => {
+          if (sender.track && sender.track.kind === 'audio') {
+            sender.track.enabled = false;
+          }
+        });
       });
+      setIsSpeaking(false);
+      setMicVolumeLevel(0);
+    }
 
-      const effectiveMute = next ? true : isMuted;
-
-      if (socket && activeVoiceChannel) {
-        socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
-          channelId: activeVoiceChannel.id,
-          isMuted: effectiveMute,
-          isDeafened: next
-        });
-      }
-      if (activeVoiceChannel?.id && user?.id) {
-        updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
-          isMuted: effectiveMute,
-          isDeafened: next,
-          username: user.username,
-          avatar: user.avatar
-        });
-      }
-      return next;
+    // Silence or restore all remote audio outputs
+    remoteAudiosRef.current.forEach((audioEl, targetUserId) => {
+      const userVol = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
+      audioEl.muted = nextDeafened;
+      audioEl.volume = nextDeafened ? 0 : userVol;
     });
+
+    if (socket && activeVoiceChannel) {
+      socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
+        channelId: activeVoiceChannel.id,
+        isMuted: effectiveMute,
+        isDeafened: nextDeafened
+      });
+    }
+    if (activeVoiceChannel?.id && user?.id) {
+      updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
+        isMuted: effectiveMute,
+        isDeafened: nextDeafened,
+        username: user.username,
+        avatar: user.avatar
+      });
+    }
   };
 
   // Set individual user volume
@@ -642,12 +724,15 @@ export function VoiceProvider({ children }) {
     setUserVolumes((prev) => {
       const next = new Map(prev);
       next.set(targetUserId, volume);
-      const audioEl = remoteAudiosRef.current.get(targetUserId);
-      if (audioEl && !isDeafened) {
-        audioEl.volume = volume;
-      }
       return next;
     });
+
+    const audioEl = remoteAudiosRef.current.get(targetUserId);
+    if (audioEl) {
+      const isDeaf = isDeafenedRef.current;
+      audioEl.muted = isDeaf || volume === 0;
+      audioEl.volume = isDeaf ? 0 : volume;
+    }
   };
 
   // Cloud WebRTC Voice Signals Listener
