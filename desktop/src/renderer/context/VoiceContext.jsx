@@ -10,7 +10,9 @@ import {
   switchVoiceRoomInCloud, 
   listenToVoiceRoomInCloud, 
   listenToSoundboardInCloud,
-  updateVoiceUserStateInCloud 
+  updateVoiceUserStateInCloud,
+  sendVoiceSignalInCloud,
+  listenToVoiceSignalsInCloud
 } from '../services/cloudSync';
 import { soundSynthesizer } from '../services/soundEffects';
 import { useNotification } from './NotificationContext';
@@ -201,18 +203,25 @@ export function VoiceProvider({ children }) {
     // Add local audio tracks if available
     if (localStreamRef.current) {
       localStreamRef.current.getAudioTracks().forEach((track) => {
-        pc.addTrack(track, localStreamRef.current);
+        try {
+          pc.addTrack(track, localStreamRef.current);
+        } catch (e) {}
       });
     }
 
     // ICE Candidates
     pc.onicecandidate = (event) => {
-      if (event.candidate && socket) {
-        socket.emit(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, {
-          targetUserId,
-          channelId,
-          candidate: event.candidate
-        });
+      if (event.candidate) {
+        if (socket && socket.connected) {
+          socket.emit(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, {
+            targetUserId,
+            channelId,
+            candidate: event.candidate
+          });
+        }
+        if (user?.id) {
+          sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'candidate', event.candidate);
+        }
       }
     };
 
@@ -224,17 +233,97 @@ export function VoiceProvider({ children }) {
         if (!audioEl) {
           audioEl = new Audio();
           audioEl.autoplay = true;
+          audioEl.playsInline = true;
+          document.body.appendChild(audioEl);
           remoteAudiosRef.current.set(targetUserId, audioEl);
         }
         audioEl.srcObject = remoteStream;
         const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
         audioEl.volume = isDeafened ? 0 : volume;
-        audioEl.play().catch(() => {});
+        audioEl.play().catch((err) => {
+          console.warn('Remote audio playback pending user interaction:', err);
+        });
       }
     };
 
     peerConnectionsRef.current.set(targetUserId, pc);
     return pc;
+  };
+
+  // Helper to send Offer to a remote user
+  const initiateVoiceOffer = async (targetUserId, channelId) => {
+    if (!targetUserId || String(targetUserId) === String(user?.id) || !channelId) return;
+    try {
+      const pc = createPeerConnection(targetUserId, channelId);
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false
+      });
+      await pc.setLocalDescription(offer);
+
+      if (socket && socket.connected) {
+        socket.emit(SOCKET_EVENTS.VOICE_OFFER, {
+          targetUserId,
+          channelId,
+          offer
+        });
+      }
+      if (user?.id) {
+        sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'offer', offer);
+      }
+    } catch (err) {
+      console.warn(`Failed to create voice offer for ${targetUserId}:`, err);
+    }
+  };
+
+  // Helper to handle incoming Offer
+  const handleIncomingVoiceOffer = async (senderUserId, channelId, offer) => {
+    if (!senderUserId || String(senderUserId) === String(user?.id) || !channelId || !offer) return;
+    try {
+      const pc = createPeerConnection(senderUserId, channelId);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      if (socket && socket.connected) {
+        socket.emit(SOCKET_EVENTS.VOICE_ANSWER, {
+          targetUserId: senderUserId,
+          channelId,
+          answer
+        });
+      }
+      if (user?.id) {
+        sendVoiceSignalInCloud(channelId, user.id, senderUserId, 'answer', answer);
+      }
+    } catch (err) {
+      console.warn('Error handling incoming voice offer:', err);
+    }
+  };
+
+  // Helper to handle incoming Answer
+  const handleIncomingVoiceAnswer = async (senderUserId, answer) => {
+    if (!senderUserId || !answer) return;
+    try {
+      const pc = peerConnectionsRef.current.get(senderUserId);
+      if (pc && pc.signalingState !== 'stable') {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    } catch (err) {
+      console.warn('Error handling voice answer:', err);
+    }
+  };
+
+  // Helper to handle incoming ICE candidate
+  const handleIncomingVoiceCandidate = async (senderUserId, candidate) => {
+    if (!senderUserId || !candidate) return;
+    try {
+      const pc = peerConnectionsRef.current.get(senderUserId);
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (err) {
+      console.warn('Error adding voice ICE candidate:', err);
+    }
   };
 
   // Join Voice Channel
@@ -247,53 +336,54 @@ export function VoiceProvider({ children }) {
       leaveVoice();
     }
 
+    // Always acquire microphone stream
+    try {
+      const constraints = {
+        audio: {
+          deviceId: selectedInputDevice ? { exact: selectedInputDevice } : undefined,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      localStreamRef.current = stream;
+
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !isMuted;
+      });
+
+      startSpeakingDetector(stream);
+    } catch (err) {
+      console.warn('Microphone permission or capture error:', err);
+      showError('Microfone Inacessível', 'Não foi possível acessar seu microfone. Verifique as permissões de áudio do seu dispositivo.');
+    }
+
     const participantInfo = {
-      userId: user?.id || 'offline-user',
+      userId: user?.id || 'user-' + Date.now(),
       username: user?.username || 'Usuário',
       avatar: user?.avatar || '',
       isMuted: isMuted,
       isDeafened: isDeafened,
       isSpeaking: false,
       isScreenSharing: false,
-      socketId: socket?.id || 'offline'
+      socketId: socket?.id || 'cloud'
     };
 
     const allVoiceIds = (activeServer?.channels || [])
       .filter((c) => c.type === 'voice')
       .map((c) => c.id);
 
+    setActiveVoiceChannel(channel);
+    setVoiceUsers([participantInfo]);
+
     if (socket && socket.connected) {
-      try {
-        const constraints = {
-          audio: {
-            deviceId: selectedInputDevice ? { exact: selectedInputDevice } : undefined,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: false
-        };
-
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        localStreamRef.current = stream;
-
-        stream.getAudioTracks().forEach((track) => {
-          track.enabled = !isMuted;
-        });
-
-        startSpeakingDetector(stream);
-        setActiveVoiceChannel(channel);
-        socket.emit(SOCKET_EVENTS.VOICE_JOIN, { channelId: channel.id });
-      } catch (err) {
-        console.error('Failed to capture audio stream for voice:', err);
-        showError('Microfone Inacessível', 'Não foi possível acessar seu microfone. Verifique as permissões de áudio do seu navegador.');
-      }
-    } else {
-      // Offline / Firebase Firestore mode fallback
-      setActiveVoiceChannel(channel);
-      setVoiceUsers([participantInfo]);
-      await switchVoiceRoomInCloud(channel.id, participantInfo, allVoiceIds);
+      socket.emit(SOCKET_EVENTS.VOICE_JOIN, { channelId: channel.id });
     }
+
+    await switchVoiceRoomInCloud(channel.id, participantInfo, allVoiceIds);
   };
 
   // Leave Voice Channel
@@ -302,7 +392,7 @@ export function VoiceProvider({ children }) {
       socket.emit(SOCKET_EVENTS.VOICE_LEAVE, { channelId: activeVoiceChannel.id });
     }
 
-    if ((!socket || !socket.connected) && activeVoiceChannel) {
+    if (activeVoiceChannel) {
       leaveVoiceInCloud(activeVoiceChannel.id, user?.id, user?.username);
     }
 
@@ -366,7 +456,6 @@ export function VoiceProvider({ children }) {
 
   // Toggle Mute
   const toggleMute = () => {
-    // Check if muted by admin
     const myMember = serverMembers.find((m) => m.id === user?.id);
     if (myMember?.mutedByAdmin) {
       console.warn('Silenciado pelo administrador.');
@@ -403,7 +492,6 @@ export function VoiceProvider({ children }) {
   const toggleDeafen = () => {
     setIsDeafened((prev) => {
       const next = !prev;
-      // When deafened, also mute mic
       if (next && !isMuted) {
         setIsMuted(true);
         if (localStreamRef.current) {
@@ -413,7 +501,6 @@ export function VoiceProvider({ children }) {
         }
       }
 
-      // Mute/unmute all remote audio elements
       remoteAudiosRef.current.forEach((audioEl, targetUserId) => {
         const vol = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
         audioEl.volume = next ? 0 : vol;
@@ -453,6 +540,27 @@ export function VoiceProvider({ children }) {
     });
   };
 
+  // Cloud WebRTC Voice Signals Listener
+  useEffect(() => {
+    if (!activeVoiceChannel?.id || !user?.id) return;
+
+    const unsub = listenToVoiceSignalsInCloud(activeVoiceChannel.id, user.id, async (sig) => {
+      if (String(sig.senderId) === String(user.id)) return;
+
+      if (sig.type === 'offer') {
+        await handleIncomingVoiceOffer(sig.senderId, activeVoiceChannel.id, sig.data);
+      } else if (sig.type === 'answer') {
+        await handleIncomingVoiceAnswer(sig.senderId, sig.data);
+      } else if (sig.type === 'candidate') {
+        await handleIncomingVoiceCandidate(sig.senderId, sig.data);
+      }
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [activeVoiceChannel?.id, user?.id]);
+
   // Socket signaling listeners for WebRTC Voice Mesh
   useEffect(() => {
     if (!socket) return;
@@ -461,25 +569,9 @@ export function VoiceProvider({ children }) {
     socket.on(SOCKET_EVENTS.VOICE_USERS_LIST, async ({ channelId, users }) => {
       setVoiceUsers(users || []);
 
-      // Create offers to all existing users in the room
       for (const remoteUser of users) {
-        if (remoteUser.userId === user?.id) continue;
-        try {
-          const pc = createPeerConnection(remoteUser.userId, channelId);
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: false
-          });
-          await pc.setLocalDescription(offer);
-
-          socket.emit(SOCKET_EVENTS.VOICE_OFFER, {
-            targetUserId: remoteUser.userId,
-            channelId,
-            offer
-          });
-        } catch (err) {
-          console.error(`Failed to create offer for ${remoteUser.username}:`, err);
-        }
+        if (String(remoteUser.userId) === String(user?.id)) continue;
+        await initiateVoiceOffer(remoteUser.userId, channelId);
       }
     });
 
@@ -495,7 +587,6 @@ export function VoiceProvider({ children }) {
     socket.on(SOCKET_EVENTS.VOICE_USER_LEFT, ({ userId: leftUserId }) => {
       setVoiceUsers((prev) => prev.filter((u) => u.userId !== leftUserId));
 
-      // Cleanup peer connection
       if (peerConnectionsRef.current.has(leftUserId)) {
         peerConnectionsRef.current.get(leftUserId).close();
         peerConnectionsRef.current.delete(leftUserId);
@@ -509,44 +600,17 @@ export function VoiceProvider({ children }) {
 
     // Handle incoming Voice SDP Offer
     socket.on(SOCKET_EVENTS.VOICE_OFFER, async ({ senderUserId, channelId, offer }) => {
-      try {
-        const pc = createPeerConnection(senderUserId, channelId);
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        socket.emit(SOCKET_EVENTS.VOICE_ANSWER, {
-          targetUserId: senderUserId,
-          channelId,
-          answer
-        });
-      } catch (err) {
-        console.error('Error handling incoming voice offer:', err);
-      }
+      await handleIncomingVoiceOffer(senderUserId, channelId, offer);
     });
 
     // Handle incoming Voice SDP Answer
     socket.on(SOCKET_EVENTS.VOICE_ANSWER, async ({ senderUserId, answer }) => {
-      try {
-        const pc = peerConnectionsRef.current.get(senderUserId);
-        if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        }
-      } catch (err) {
-        console.error('Error handling voice answer:', err);
-      }
+      await handleIncomingVoiceAnswer(senderUserId, answer);
     });
 
     // Handle incoming Voice ICE Candidate
     socket.on(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, async ({ senderUserId, candidate }) => {
-      try {
-        const pc = peerConnectionsRef.current.get(senderUserId);
-        if (pc && candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } catch (err) {
-        console.warn('Error adding voice ICE candidate:', err);
-      }
+      await handleIncomingVoiceCandidate(senderUserId, candidate);
     });
 
     // Update mute state in list
@@ -592,11 +656,9 @@ export function VoiceProvider({ children }) {
     };
   }, [socket, user?.id, activeVoiceChannel?.id]);
 
-  // Firestore listener for all voice channels on active server when socket is offline
+  // Firestore listener for all voice channels on active server
   useEffect(() => {
-    if (!activeServer || (socket && socket.connected)) {
-      return;
-    }
+    if (!activeServer) return;
 
     const voiceChannels = activeServer.channels?.filter((c) => c.type === 'voice') || [];
     const unsubscribes = voiceChannels.map((channel) => {
@@ -628,6 +690,15 @@ export function VoiceProvider({ children }) {
 
         if (activeVoiceChannel?.id === channel.id) {
           setVoiceUsers(cleanUsers);
+
+          // Connect WebRTC audio with all other users in this active voice room
+          cleanUsers.forEach((remoteUser) => {
+            if (remoteUser.userId && user?.id && String(remoteUser.userId) !== String(user.id)) {
+              if (String(user.id) < String(remoteUser.userId) || !peerConnectionsRef.current.has(remoteUser.userId)) {
+                initiateVoiceOffer(remoteUser.userId, activeVoiceChannel.id);
+              }
+            }
+          });
         }
       });
     });
@@ -635,7 +706,7 @@ export function VoiceProvider({ children }) {
     return () => {
       unsubscribes.forEach((unsub) => unsub());
     };
-  }, [activeServer, socket, socket?.connected, activeVoiceChannel?.id, user?.id, user?.username]);
+  }, [activeServer, activeVoiceChannel?.id, user?.id, user?.username]);
 
   // Clean up voice room immediately when closing the tab/window
   useEffect(() => {

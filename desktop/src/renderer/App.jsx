@@ -29,6 +29,40 @@ import ServerSettingsModal from './components/modals/ServerSettingsModal';
 import AuthPage from './pages/AuthPage';
 import { useScreenShare } from './context/ScreenShareContext';
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('ErrorBoundary caught an error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 20, textAlign: 'center', color: '#f87171', backgroundColor: 'var(--bg-secondary)', borderRadius: 8, margin: 20, border: '1px solid #ef4444' }}>
+          <h3>Ops! Ocorreu um erro inesperado nesta seção.</h3>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{this.state.error?.message || 'Erro desconhecido'}</p>
+          <button 
+            className="btn btn-primary" 
+            style={{ marginTop: 10 }}
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
+            Tentar Novamente
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function MainAppContent() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const { activeServer, activeChannel, joinByCode } = useServer();
@@ -126,14 +160,16 @@ function MainAppContent() {
       {/* Floating Mini Stream Player */}
       <MiniStreamPlayer />
 
-      {/* Modals */}
-      <CreateServerModal />
-      <CreateChannelModal />
-      <InviteModal />
-      <PendingInvitesModal />
-      <ScreenSharePickerModal />
-      <SettingsModal />
-      <ServerSettingsModal />
+      {/* Modals with ErrorBoundary Protection */}
+      <ErrorBoundary>
+        <CreateServerModal />
+        <CreateChannelModal />
+        <InviteModal />
+        <PendingInvitesModal />
+        <ScreenSharePickerModal />
+        <SettingsModal />
+        <ServerSettingsModal />
+      </ErrorBoundary>
     </div>
   );
 }

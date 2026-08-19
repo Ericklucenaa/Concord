@@ -853,3 +853,68 @@ export async function removeFriendInCloud(friendshipId) {
     await deleteDoc(friendRef);
   } catch (err) {}
 }
+
+// WebRTC Real-Time Voice Signaling via Cloud
+export async function sendVoiceSignalInCloud(channelId, senderId, targetId, type, data) {
+  if (!channelId || !senderId || !targetId || !type || !data) return;
+  try {
+    const signalId = `vsig_${channelId}_${senderId}_${targetId}_${type}_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const signalRef = doc(firestore, 'concord_voice_signals', signalId);
+    await setDoc(signalRef, {
+      id: signalId,
+      channelId: String(channelId),
+      senderId: String(senderId),
+      targetId: String(targetId),
+      type,
+      data: JSON.stringify(data),
+      timestamp: Date.now()
+    });
+  } catch (err) {
+    console.warn('Error sending voice signal in cloud:', err);
+  }
+}
+
+export function listenToVoiceSignalsInCloud(channelId, myUserId, onSignal) {
+  if (!channelId || !myUserId) return () => {};
+  try {
+    const minTimestamp = Date.now() - 30000;
+    const q = query(
+      collection(firestore, 'concord_voice_signals'),
+      where('channelId', '==', String(channelId)),
+      where('targetId', '==', String(myUserId))
+    );
+
+    const processedSignals = new Set();
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added') {
+          const docData = change.doc.data();
+          if (!docData || docData.timestamp < minTimestamp) return;
+          if (processedSignals.has(docData.id)) return;
+          processedSignals.add(docData.id);
+
+          try {
+            const parsedData = JSON.parse(docData.data);
+            onSignal({
+              senderId: docData.senderId,
+              targetId: docData.targetId,
+              type: docData.type,
+              data: parsedData
+            });
+            deleteDoc(change.doc.ref).catch(() => {});
+          } catch (e) {
+            console.warn('Failed to parse voice signal data:', e);
+          }
+        }
+      });
+    }, (error) => {
+      console.warn('Error listening to voice signals:', error);
+    });
+
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to setup voice signal listener:', err);
+    return () => {};
+  }
+}

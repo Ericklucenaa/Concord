@@ -50,16 +50,69 @@ export default function SettingsModal() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState('');
 
+  const userTag = user?.userTag || (user?.id ? String(user.id).substring(0, 4).toUpperCase() : '0000');
+
+  const copyMyNickname = () => {
+    const fullNick = `${username.trim() || user?.username}#${userTag}`;
+    navigator.clipboard.writeText(fullNick);
+    setCopiedNickname(true);
+    showToast(`Apelido copiado: ${fullNick}`, 'info');
+    setTimeout(() => setCopiedNickname(false), 2500);
+  };
+
   const [isScanningDevices, setIsScanningDevices] = useState(false);
   const [deviceScanMessage, setDeviceScanMessage] = useState('');
   const [isPlayingSoundTest, setIsPlayingSoundTest] = useState(false);
 
   const fileInputRef = useRef(null);
+  const wallpaperInputRef = useRef(null);
   const [isTestingMic, setIsTestingMic] = useState(false);
   const testStreamRef = useRef(null);
   const [testMicLevel, setTestMicLevel] = useState(0);
 
   const [theme, setTheme] = useState(() => localStorage.getItem('concord_theme') || 'dark');
+  const [wallpaper, setWallpaper] = useState(() => localStorage.getItem('concord_wallpaper') || '');
+  const [wallpaperOpacity, setWallpaperOpacity] = useState(() => Number(localStorage.getItem('concord_wallpaper_opacity')) || 40);
+  const [wallpaperBlur, setWallpaperBlur] = useState(() => Number(localStorage.getItem('concord_wallpaper_blur')) || 4);
+
+  const handleWallpaperSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showError('Arquivo muito grande', 'O papel de parede deve ter no máximo 10MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result;
+      if (dataUrl) {
+        setWallpaper(dataUrl);
+        localStorage.setItem('concord_wallpaper', dataUrl);
+        window.dispatchEvent(new Event('concord:wallpaper-updated'));
+        showToast('Papel de parede aplicado!', 'success');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveWallpaper = () => {
+    setWallpaper('');
+    localStorage.removeItem('concord_wallpaper');
+    window.dispatchEvent(new Event('concord:wallpaper-updated'));
+    showToast('Papel de parede removido', 'info');
+  };
+
+  const handleUpdateOpacity = (val) => {
+    setWallpaperOpacity(val);
+    localStorage.setItem('concord_wallpaper_opacity', String(val));
+    window.dispatchEvent(new Event('concord:wallpaper-updated'));
+  };
+
+  const handleUpdateBlur = (val) => {
+    setWallpaperBlur(val);
+    localStorage.setItem('concord_wallpaper_blur', String(val));
+    window.dispatchEvent(new Event('concord:wallpaper-updated'));
+  };
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
