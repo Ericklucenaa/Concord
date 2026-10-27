@@ -2,12 +2,16 @@ import http from 'http';
 import app from './app.js';
 import { initDb } from './db/database.js';
 import { setupSocketIO } from './socket/socketHandler.js';
+import { getJwtSecret } from './config.js';
 
 const PORT = process.env.PORT || 4000;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 
 async function startServer() {
   try {
+    // 0. Fail fast if security config is invalid (e.g. no JWT_SECRET in prod).
+    getJwtSecret();
+
     // 1. Initialize SQLite Database
     await initDb();
 

@@ -12,9 +12,24 @@ const voiceRooms = new Map();
 const userSockets = new Map();
 
 export function setupSocketIO(httpServer, corsOrigin) {
+  // Allow native clients (Electron / no Origin) plus an explicit web allowlist.
+  const allowlist = new Set(
+    [
+      ...String(corsOrigin || 'http://localhost:5173').split(','),
+      'http://localhost:5173',
+      'https://concord-3af70.web.app',
+      'https://concord-3af70.firebaseapp.com'
+    ]
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
+
   const io = new Server(httpServer, {
     cors: {
-      origin: '*', // Allow desktop Electron and browser clients
+      origin(origin, callback) {
+        if (!origin) return callback(null, true); // Electron / native clients
+        return callback(null, allowlist.has(origin));
+      },
       methods: ['GET', 'POST']
     }
   });

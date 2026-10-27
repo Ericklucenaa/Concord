@@ -1070,17 +1070,15 @@ export async function getLatestAppVersionFromCloud() {
   return null;
 }
 
-export async function publishAppVersionToCloud(versionInfo) {
-  if (!versionInfo || !versionInfo.version) return;
-  try {
-    const docRef = doc(firestore, 'concord_app_version', 'latest');
-    await setDoc(docRef, {
-      ...versionInfo,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
-  } catch (err) {
-    console.warn('Error publishing app version to cloud:', err);
-  }
+// SECURITY: the auto-update manifest must NOT be writable from the client. A
+// poisoned `concord_app_version` doc could make every desktop client download
+// and run a malicious installer. Firestore rules now deny client writes to this
+// collection; publish updates via `version.json` (publish_version.js) or the
+// Admin SDK / Firebase console instead. This function is intentionally disabled.
+export async function publishAppVersionToCloud() {
+  console.warn(
+    'publishAppVersionToCloud is disabled: publish updates via version.json or the Admin SDK, not the client.'
+  );
 }
 
 export function listenToAppVersionInCloud(callback) {

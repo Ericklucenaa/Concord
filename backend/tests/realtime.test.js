@@ -11,6 +11,7 @@ let baseUrl;
 
 before(async () => {
   process.env.NODE_ENV = 'test';
+  process.env.JWT_SECRET = 'test_secret_concord_ci';
   process.env.DB_PATH = './database/test_concord_realtime.sqlite';
   await initDb();
 

@@ -1,69 +1,98 @@
 rules_version = '2';
+
+// Concord Firestore security rules.
+//
+// Previously every collection used `allow read, write: if true`, which exposed
+// the entire database (profiles, private DMs, invites, friends) to anonymous
+// read AND write by anyone with the public Firebase config. These rules require
+// authentication for all app data, lock the auto-update manifest to read-only,
+// and give users write access only to their own profile document.
+//
+// NOTE (recommended next step): tighten the broad `if signedIn()` collections
+// below to per-document ownership/membership checks (e.g. a message can only be
+// written by its author, a server doc only by its members/owner).
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // User Profiles
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // User profiles: any signed-in user can read; only the owner writes their own doc.
     match /concord_users/{userId} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow write: if isOwner(userId);
     }
-    
-    // Nicknames registry for uniqueness and lookup
+
+    // Nickname registry (doc id = nickname) for uniqueness/lookup.
     match /concord_nicknames/{nickname} {
-      allow read, write: if true;
+      allow read: if signedIn();
+      allow write: if signedIn();
     }
-    
+
     // Servers & Channels
     match /concord_servers/{serverId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
-    
+
     // Public & Code Invites
     match /concord_invites/{code} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
-    
+
     // User Targeted Direct Invites (Inbox)
     match /concord_user_invites/{inviteId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
-    
+
     // Messages in text channels
     match /concord_messages/{messageId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
 
     // Direct Messages (1-on-1 private chat)
     match /concord_direct_messages/{messageId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
 
     // Friendships & Friend Requests
     match /concord_friends/{friendId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
-    
+
     // Realtime Voice Room Presence
     match /concord_voice_rooms/{roomId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
 
     // Realtime WebRTC Screen and Voice Signaling
     match /concord_screen_signals/{signalId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
     match /concord_voice_signals/{signalId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
     match /concord_soundboard/{soundId} {
-      allow read, write: if true;
+      allow read, write: if signedIn();
     }
+
+    // Auto-update manifest: readable by anyone (checked before login), but NEVER
+    // writable by clients. Publish new versions only via the Admin SDK / CI.
+    // This closes the remote-code-execution path where a poisoned version doc
+    // could point the desktop updater at a malicious installer.
     match /concord_app_version/{versionId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
-    
-    // Default fallback
+
+    // Fallback: any other collection requires authentication (no anonymous access).
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if signedIn();
     }
   }
 }
