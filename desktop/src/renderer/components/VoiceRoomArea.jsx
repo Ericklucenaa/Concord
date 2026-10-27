@@ -1,48 +1,118 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useVoice } from '../context/VoiceContext';
-import { useScreenShare } from '../context/ScreenShareContext';
-import { useAuth } from '../context/AuthContext';
 import {
   Tv,
   Maximize2,
   Minimize2,
+  Mic,
   MicOff,
   Radio,
-  ExternalLink,
+  PictureInPicture2,
   Sparkles,
   Video,
   VideoOff,
   Headphones,
-  PhoneOff
+  HeadphoneOff,
+  PhoneOff,
+  Volume2,
+  Signal,
+  UserX,
+  Eye,
+  EyeOff
 } from 'lucide-react';
-import SoundboardModal from './SoundboardModal';
+import { useVoice } from '../context/VoiceContext';
+import { useScreenShare } from '../context/ScreenShareContext';
+import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
+import SoundboardModal from './SoundboardModal';
+import { isModerator } from '../services/permissions';
+import { defaultAvatar } from '../services/cloud/util';
 import { logWarn } from '../services/log';
+
+const QUALITY_LABEL = {
+  good: 'Conexão estável',
+  ok: 'Conexão instável',
+  bad: 'Conexão ruim',
+  connecting: 'Conectando…',
+  unknown: 'Conectado'
+};
+
+function CameraVideo({ stream }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && stream) ref.current.srcObject = stream;
+  }, [stream]);
+  return <video ref={ref} autoPlay playsInline muted className="voice-tile-video" />;
+}
+
+function ParticipantTile({ participant, isMe, compact, canModerate, onKick, onWatch, cameraStream }) {
+  const showCamera = isMe && cameraStream;
+  return (
+    <div className={`voice-tile ${participant.isSpeaking ? 'speaking' : ''} ${compact ? 'compact' : ''}`}>
+      <div className="voice-tile-backdrop" style={{ backgroundImage: `url("${participant.avatar || defaultAvatar(participant.username)}")` }} />
+      {showCamera ? (
+        <CameraVideo stream={cameraStream} />
+      ) : (
+        <div className="voice-tile-avatar-wrap">
+          <img src={participant.avatar || defaultAvatar(participant.username)} alt="" className="voice-tile-avatar" />
+        </div>
+      )}
+
+      {participant.isScreenSharing && (
+        <div className="voice-tile-live">
+          <span className="live-badge"><Radio size={10} /> AO VIVO</span>
+          {!isMe && onWatch && (
+            <button className="voice-tile-watch" onClick={() => onWatch(participant)}>
+              <Eye size={13} /> Assistir
+            </button>
+          )}
+        </div>
+      )}
+
+      {canModerate && !isMe && (
+        <button className="voice-tile-kick" onClick={() => onKick(participant)} title="Desconectar do canal">
+          <UserX size={14} />
+        </button>
+      )}
+
+      <div className="voice-tile-name">
+        {participant.isMuted && <MicOff size={13} className="danger" />}
+        {participant.isDeafened && <HeadphoneOff size={13} className="danger" />}
+        <span>{participant.username}{isMe ? ' (você)' : ''}</span>
+      </div>
+    </div>
+  );
+}
 
 export default function VoiceRoomArea() {
   const { showConfirm } = useNotification();
   const { user } = useAuth();
-  const { 
-    activeVoiceChannel, 
-    voiceUsers, 
-    isSpeaking, 
+  const {
+    activeVoiceChannel,
+    voiceServer,
+    voiceUsers,
     isMuted,
     isDeafened,
     isCameraOn,
     localCameraStream,
     toggleCamera,
-    kickUserFromVoice
+    toggleMute,
+    toggleDeafen,
+    leaveVoice,
+    kickUserFromVoice,
+    connectionQuality,
+    averagePing
   } = useVoice();
-  const { 
-    isScreenSharing, 
-    localScreenStream, 
-    remoteScreenStreams, 
-    activePresenter, 
-    screenQuality, 
-    screenFps, 
-    stopScreenShare, 
+  const {
+    isScreenSharing,
+    localScreenStream,
+    remoteScreenStreams,
+    activePresenter,
+    screenQuality,
+    screenFps,
+    stopScreenShare,
     setIsPickerOpen,
-    setActivePresenter 
+    stopWatching,
+    watchStream
   } = useScreenShare();
 
   const videoRef = useRef(null);
@@ -50,310 +120,147 @@ export default function VoiceRoomArea() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
 
-  // Attach active video stream (local or remote) to video element
+  const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
+  const streamReady = isScreenSharing
+    ? Boolean(localScreenStream?.active)
+    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
+  const hasActiveStream = isScreenSharing || isViewer;
+  const canModerate = isModerator(voiceServer, user?.id);
+
   useEffect(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
-
-    let currentStream = null;
-    if (isScreenSharing && localScreenStream) {
-      currentStream = localScreenStream;
-    } else if (activePresenter && remoteScreenStreams.has(activePresenter.userId)) {
-      currentStream = remoteScreenStreams.get(activePresenter.userId);
-    }
-
-    if (currentStream && currentStream.active && currentStream.getVideoTracks().some((t) => t.readyState === 'live')) {
-      videoEl.srcObject = currentStream;
-      videoEl.play().catch((e) => console.warn('Screen video play:', e));
+    const stream = isScreenSharing ? localScreenStream : remoteScreenStreams.get(activePresenter?.userId);
+    if (stream?.active && stream.getVideoTracks().some((t) => t.readyState === 'live')) {
+      videoEl.srcObject = stream;
+      videoEl.play().catch((err) => logWarn('screen video play', err));
     } else {
       videoEl.srcObject = null;
-      videoEl.load();
     }
-  }, [isScreenSharing, localScreenStream, activePresenter, remoteScreenStreams]);
+  }, [isScreenSharing, localScreenStream, activePresenter, remoteScreenStreams, streamReady]);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
-    }
+    if (!document.fullscreenElement) containerRef.current?.requestFullscreen().catch((err) => logWarn('fullscreen', err));
+    else document.exitFullscreen().catch((err) => logWarn('fullscreen', err));
   };
 
   const togglePictureInPicture = async () => {
-    if (!videoRef.current) return;
     try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else if (document.pictureInPictureEnabled) {
-        await videoRef.current.requestPictureInPicture();
-      }
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await videoRef.current?.requestPictureInPicture();
     } catch (err) {
       logWarn('picture-in-picture', err);
     }
   };
 
-  const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
-  const streamReady = isScreenSharing 
-    ? Boolean(localScreenStream && localScreenStream.active) 
-    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
-  const hasActiveStream = isScreenSharing || isViewer;
+  const kick = async (participant) => {
+    const confirmed = await showConfirm('Desconectar usuário', `Desconectar @${participant.username} do canal de voz?`, { isDanger: true, confirmText: 'Desconectar' });
+    if (confirmed && activeVoiceChannel) kickUserFromVoice(activeVoiceChannel.id, participant.userId);
+  };
+
+  const tiles = voiceUsers.map((u) => (
+    <ParticipantTile
+      key={u.userId}
+      participant={u}
+      isMe={u.userId === user?.id}
+      compact={hasActiveStream}
+      canModerate={canModerate}
+      onKick={kick}
+      onWatch={(p) => watchStream(p, activeVoiceChannel)}
+      cameraStream={u.userId === user?.id && isCameraOn ? localCameraStream : null}
+    />
+  ));
 
   return (
     <div className="voice-stream-view" ref={containerRef}>
-      {/* Stream Video Area (if sharing or watching screen) */}
+      <header className="chat-header voice-header">
+        <div className="chat-header-info">
+          <Volume2 size={20} className="muted-icon" />
+          <span className="chat-header-title">{activeVoiceChannel?.name}</span>
+          <span className="chat-header-desc">
+            {voiceUsers.length} {voiceUsers.length === 1 ? 'pessoa' : 'pessoas'} na sala
+          </span>
+        </div>
+        <div className={`quality-chip ${connectionQuality}`} title={averagePing !== null ? `Latência média: ${averagePing} ms` : undefined}>
+          <Signal size={13} />
+          {QUALITY_LABEL[connectionQuality]}
+          {averagePing !== null && <span className="quality-ping">{averagePing} ms</span>}
+        </div>
+      </header>
+
       {hasActiveStream ? (
-        <div className="stream-player-container" style={{ position: 'relative', width: '100%', height: '100%', minHeight: 380, backgroundColor: '#06070a', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-          {streamReady ? (
-            <video 
-              ref={videoRef} 
-              className="screen-video" 
-              autoPlay 
-              playsInline 
-              muted={isScreenSharing}
-              style={{ 
-                width: '100%', 
-                height: '100%', 
-                objectFit: 'contain',
-                imageRendering: '-webkit-optimize-contrast',
-                borderRadius: 'var(--radius-md)'
-              }}
-            />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 32, textAlign: 'center' }}>
-              <Radio size={52} style={{ color: 'var(--accent-primary)', animation: 'pulse 1.5s infinite' }} />
-              <div style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)' }}>
-                Conectando à transmissão de {activePresenter?.username || 'apresentador'}...
+        <div className="voice-stage with-stream">
+          <div className="stream-frame">
+            {streamReady ? (
+              <video ref={videoRef} className="screen-video" autoPlay playsInline muted={isScreenSharing} />
+            ) : (
+              <div className="stream-waiting">
+                <div className="pulse-ring"><Radio size={28} /></div>
+                <strong>Conectando à transmissão de {activePresenter?.username || 'apresentador'}…</strong>
+                <span>{screenQuality} • {screenFps} FPS</span>
               </div>
-              <div style={{ fontSize: 13, color: 'var(--text-muted)', maxWidth: 400, lineHeight: 1.5 }}>
-                Estabelecendo canal direto WebRTC P2P em alta definição ({screenQuality} @ {screenFps}fps).
-              </div>
-            </div>
-          )}
-
-          <div className="stream-overlay-badge" style={{ position: 'absolute', top: 16, left: 16, display: 'flex', alignItems: 'center', gap: 8, backgroundColor: 'rgba(0, 0, 0, 0.7)', padding: '6px 14px', borderRadius: 'var(--radius-full)', backdropFilter: 'blur(10px)', zIndex: 10, border: '1px solid rgba(255,255,255,0.1)' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, backgroundColor: 'var(--accent-danger)', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.5px', boxShadow: '0 0 8px rgba(239,68,68,0.6)' }}>
-              <Radio size={12} />
-              AO VIVO
-            </span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
+            )}
+            <div className="stream-overlay-badge">
+              <span className="live-badge">AO VIVO</span>
               {isScreenSharing ? 'Você está transmitindo' : `${activePresenter?.username} está transmitindo`}
-            </span>
-            <span style={{ opacity: 0.7, fontSize: 11, color: '#fff', fontFamily: 'var(--font-mono)' }}>({screenQuality} @ {screenFps}fps)</span>
+            </div>
+            <div className="stream-tools">
+              {streamReady && document.pictureInPictureEnabled && (
+                <button className="icon-btn" onClick={togglePictureInPicture} title="Janela flutuante">
+                  <PictureInPicture2 size={17} />
+                </button>
+              )}
+              {isViewer && (
+                <button className="icon-btn" onClick={stopWatching} title="Parar de assistir">
+                  <EyeOff size={17} />
+                </button>
+              )}
+              <button className="icon-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Sair da tela cheia' : 'Tela cheia'}>
+                {isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+              </button>
+            </div>
           </div>
-
-          <div 
-            style={{
-              position: 'absolute',
-              bottom: 20,
-              right: 20,
-              display: 'flex',
-              gap: 8,
-              backgroundColor: 'rgba(0, 0, 0, 0.8)',
-              padding: '6px 12px',
-              borderRadius: 'var(--radius-full)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-              zIndex: 10
-            }}
-          >
-            {isScreenSharing && (
-              <button 
-                className="btn btn-danger" 
-                style={{ padding: '4px 12px', fontSize: 12, fontWeight: 700 }}
-                onClick={stopScreenShare}
-              >
-                Parar Transmissão
-              </button>
-            )}
-
-            {isViewer && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ padding: '4px 12px', fontSize: 12 }}
-                onClick={() => setActivePresenter(null)}
-              >
-                Ocultar Stream
-              </button>
-            )}
-
-            {streamReady && document.pictureInPictureEnabled && (
-              <button 
-                className="icon-btn" 
-                onClick={togglePictureInPicture} 
-                title="Modo Picture-in-Picture (Janela Flutuante)"
-                style={{ padding: '6px' }}
-              >
-                <ExternalLink size={16} />
-              </button>
-            )}
-
-            <button 
-              className="icon-btn" 
-              onClick={() => setIsSoundboardOpen(true)} 
-              title="Abrir Soundboard"
-              style={{ padding: '6px', color: 'var(--accent-warning)' }}
-            >
-              <Sparkles size={16} />
-            </button>
-
-            <button 
-              className="icon-btn" 
-              onClick={toggleFullscreen} 
-              title={isFullscreen ? 'Sair da Tela Cheia' : 'Tela Cheia'}
-              style={{ padding: '6px' }}
-            >
-              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-            </button>
-          </div>
+          <div className="voice-filmstrip">{tiles}</div>
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-          <Radio size={48} style={{ color: 'var(--accent-primary)', opacity: 0.8 }} />
-          <h2 style={{ fontSize: 20, fontWeight: 700 }}>Canal de Voz: {activeVoiceChannel?.name}</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>
-            Você está conectado. Fale livremente ou compartilhe sua tela com o grupo.
-          </p>
-
-          <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button 
-              className={`btn ${isCameraOn ? 'btn-danger' : 'btn-secondary'}`}
-              onClick={toggleCamera}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-            >
-              {isCameraOn ? <VideoOff size={16} /> : <Video size={16} />}
-              {isCameraOn ? 'Desligar Câmera' : 'Ligar Câmera'}
-            </button>
-            <button 
-              className="btn btn-primary"
-              onClick={() => setIsPickerOpen(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-            >
-              <Tv size={16} />
-              Transmitir Minha Tela
-            </button>
-            <button 
-              className="btn btn-secondary"
-              onClick={() => setIsSoundboardOpen(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-            >
-              <Sparkles size={16} style={{ color: 'var(--accent-warning)' }} />
-              Soundboard
-            </button>
-          </div>
+        <div className="voice-stage">
+          <div className={`voice-grid count-${Math.min(voiceUsers.length, 9)}`}>{tiles}</div>
         </div>
       )}
 
-      {/* Voice Participants Grid */}
-      <div className="voice-grid">
-        {voiceUsers.map((u) => {
-          const isMe = u.userId === user?.id;
-          const speaking = isMe ? isSpeaking : u.isSpeaking;
-          const muted = isMe ? isMuted : u.isMuted;
-          const deafened = isMe ? isDeafened : u.isDeafened;
-          const hasCamera = isMe ? (isCameraOn && localCameraStream) : u.isCameraOn;
-
-          return (
-            <div 
-              key={u.userId} 
-              className={`voice-card ${speaking ? 'speaking' : ''}`}
-              style={{ position: 'relative', overflow: 'hidden' }}
-            >
-              {isMe && hasCamera ? (
-                <UserCameraVideo stream={localCameraStream} />
-              ) : (
-                <img 
-                  src={u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.username}`} 
-                  alt="" 
-                  className="avatar" 
-                />
-              )}
-              <span className="name" style={{ zIndex: 2 }}>{u.username}</span>
-
-              {/* Disconnect/Kick button for remote users */}
-              {!isMe && (
-                <button
-                  className="icon-btn hover-danger"
-                  style={{
-                    position: 'absolute',
-                    top: 8,
-                    right: 8,
-                    zIndex: 10,
-                    backgroundColor: 'rgba(0,0,0,0.6)',
-                    padding: '4px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    fontSize: 11,
-                    color: 'var(--accent-danger)',
-                    border: '1px solid rgba(239, 68, 68, 0.3)'
-                  }}
-                  title="Desconectar este usuário do canal"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    const confirmed = await showConfirm(
-                      'Desconectar Usuário',
-                      `Deseja desconectar @${u.username} do canal de voz?`,
-                      { isDanger: true, confirmText: 'Desconectar' }
-                    );
-                    if (confirmed && activeVoiceChannel) {
-                      kickUserFromVoice(activeVoiceChannel.id, u.userId, u.username);
-                    }
-                  }}
-                >
-                  <PhoneOff size={12} />
-                  <span style={{ fontSize: 10, fontWeight: 700 }}>Desconectar</span>
-                </button>
-              )}
-
-              <div className="voice-card-status" style={{ display: 'flex', alignItems: 'center', gap: 4, zIndex: 2 }}>
-                {hasCamera && <Video size={13} style={{ color: 'var(--accent-success)' }} title="Câmera Ligada" />}
-                {muted && <MicOff size={14} style={{ color: 'var(--accent-danger)' }} title="Microfone Desativado" />}
-                {deafened && <Headphones size={14} style={{ color: 'var(--accent-danger)' }} title="Áudio Desativado" />}
-                {u.isScreenSharing && (
-                  <span style={{ fontSize: 9, backgroundColor: 'var(--accent-danger)', color: '#fff', padding: '1px 4px', borderRadius: 3, fontWeight: 800 }}>LIVE</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
+      <div className="voice-dock">
+        <button className={`dock-btn ${isMuted ? 'off' : ''}`} onClick={toggleMute} title={isMuted ? 'Ativar microfone' : 'Silenciar microfone'}>
+          {isMuted ? <MicOff size={20} /> : <Mic size={20} />}
+        </button>
+        <button className={`dock-btn ${isDeafened ? 'off' : ''}`} onClick={toggleDeafen} title={isDeafened ? 'Ativar áudio' : 'Desativar áudio'}>
+          {isDeafened ? <HeadphoneOff size={20} /> : <Headphones size={20} />}
+        </button>
+        <button className={`dock-btn ${isCameraOn ? 'on' : ''}`} onClick={toggleCamera} title={isCameraOn ? 'Desligar câmera' : 'Ligar câmera'}>
+          {isCameraOn ? <Video size={20} /> : <VideoOff size={20} />}
+        </button>
+        <button
+          className={`dock-btn ${isScreenSharing ? 'on' : ''}`}
+          onClick={() => (isScreenSharing ? stopScreenShare() : setIsPickerOpen(true))}
+          title={isScreenSharing ? 'Parar transmissão' : 'Transmitir tela'}
+        >
+          <Tv size={20} />
+        </button>
+        <button className="dock-btn" onClick={() => setIsSoundboardOpen(true)} title="Soundboard">
+          <Sparkles size={20} />
+        </button>
+        <span className="dock-divider" />
+        <button className="dock-btn leave" onClick={leaveVoice} title="Sair da chamada">
+          <PhoneOff size={20} />
+        </button>
       </div>
 
-      {/* Soundboard Modal */}
-      <SoundboardModal 
-        isOpen={isSoundboardOpen} 
-        onClose={() => setIsSoundboardOpen(false)} 
-      />
+      <SoundboardModal isOpen={isSoundboardOpen} onClose={() => setIsSoundboardOpen(false)} />
     </div>
-  );
-}
-
-function UserCameraVideo({ stream }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (ref.current && stream) {
-      ref.current.srcObject = stream;
-    }
-  }, [stream]);
-  return (
-    <video
-      ref={ref}
-      autoPlay
-      playsInline
-      muted
-      style={{
-        width: '100%',
-        height: '100%',
-        objectFit: 'cover',
-        borderRadius: 'var(--radius-md)',
-        position: 'absolute',
-        top: 0,
-        left: 0
-      }}
-    />
   );
 }

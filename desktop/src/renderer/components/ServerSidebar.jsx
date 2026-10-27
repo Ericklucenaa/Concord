@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
 import { 
-  Compass, 
+  Radio, 
   Plus, 
   Mail, 
   Settings, 
@@ -87,9 +87,8 @@ export default function ServerSidebar() {
         <button 
           className="server-btn"
           onClick={() => setActiveServer(null)}
-          style={{ backgroundColor: !activeServer ? 'var(--accent-primary)' : 'var(--bg-secondary)', color: !activeServer ? '#fff' : 'var(--accent-primary)' }}
         >
-          <Compass size={24} />
+          <Radio size={22} />
           {unreadThreadCount > 0 && <span className="badge-counter">{unreadThreadCount}</span>}
         </button>
       </div>

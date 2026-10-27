@@ -317,7 +317,7 @@ export default function ChannelSidebar() {
                   )}
                   {isStaff && textChannels.length > 1 && (
                     <button 
-                      className="icon-btn hover-danger" 
+                      className="icon-btn hover-danger channel-hover-action" 
                       style={{ padding: 2, opacity: 0.6 }}
                       title="Excluir Canal de Texto"
                       onClick={async (e) => {
@@ -426,7 +426,7 @@ export default function ChannelSidebar() {
                     )}
                     {isStaff && voiceChannels.length > 1 && (
                       <button 
-                        className="icon-btn hover-danger" 
+                        className="icon-btn hover-danger channel-hover-action" 
                         style={{ padding: 2, opacity: 0.6 }}
                         title="Excluir Canal de Voz"
                         onClick={async (e) => {
