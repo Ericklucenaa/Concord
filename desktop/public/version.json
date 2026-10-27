@@ -1,9 +1,10 @@
 {
-  "version": "1.0.8",
-  "name": "Concord v1.0.8",
-  "releaseDate": "2026-08-19",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.0.8/Concord.Setup.1.0.8.exe",
+  "version": "1.1.0",
+  "name": "Concord v1.1.0",
+  "releaseDate": "2026-10-27",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.1.0/Concord-Setup-1.1.0.exe",
+  "sha256": "7e2b3eb93bd44b64177f8b1ddad0638695217c66cc2338fdf130cc829a29bc90",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "Adição de supressão avançada de ruído de fundo, cancelamento de eco, ganho automático e gate inteligente de sensibilidade do microfone.",
-  "isMandatory": false
+  "releaseNotes": "Concord 1.1: menções, respostas, edição, aperte-para-falar, grupos e mais",
+  "isMandatory": true
 }
