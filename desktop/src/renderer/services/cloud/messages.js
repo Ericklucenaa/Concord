@@ -12,6 +12,9 @@ import {
   onSnapshot,
   arrayUnion,
   arrayRemove,
+  deleteField,
+  writeBatch,
+  Timestamp,
   FieldPath
 } from 'firebase/firestore';
 import { firestore } from '../firebase';
@@ -80,8 +83,11 @@ export function listenToMessages(scope, count, callback, onError) {
   const q = query(...baseQuery(scope), orderBy('createdAt', 'desc'), limit(count));
   return onSnapshot(
     q,
+    { includeMetadataChanges: true },
     (snap) => {
-      const messages = snap.docs.map((d) => normalizeMessage(d.data(), scope)).reverse();
+      const messages = snap.docs
+        .map((d) => ({ ...normalizeMessage(d.data(), scope), pending: d.metadata.hasPendingWrites }))
+        .reverse();
       callback(messages, { hasMore: snap.docs.length >= count, fromCache: snap.metadata.fromCache });
     },
     (err) => {
@@ -131,8 +137,12 @@ function preview(content, attachments, imageUrl) {
 /**
  * Sends a message and updates the side documents that drive unread badges
  * and mention notifications.
+ *
+ * The message is written to the local cache immediately (it shows up as
+ * "pending"); `committed` only settles when the server confirms, so callers
+ * should not block the UI on it.
  */
-export async function sendMessage(scope, author, payload) {
+export function sendMessage(scope, author, payload) {
   const content = String(payload.content || '').slice(0, MAX_CONTENT_LENGTH);
   const id = newId('msg');
   const createdAt = nowIso();
@@ -145,10 +155,14 @@ export async function sendMessage(scope, author, payload) {
     reactions: {},
     createdAt
   };
+  if (payload.poll) {
+    common.poll = payload.poll;
+    common.pollVotes = {};
+  }
 
   if (scope.type === 'channel') {
     const mentions = (payload.mentions || []).filter((m) => m !== author.id);
-    await setDoc(doc(firestore, CHANNEL_MESSAGES, id), {
+    const committed = setDoc(doc(firestore, CHANNEL_MESSAGES, id), {
       ...common,
       serverId: scope.serverId,
       channelId: scope.channelId,
@@ -179,25 +193,28 @@ export async function sendMessage(scope, author, payload) {
         channelId: scope.channelId,
         messageId: id,
         preview: text,
+        read: false,
         createdAt
       }));
     });
-  } else {
-    await setDoc(doc(firestore, DIRECT_MESSAGES, id), {
+    return { id, committed };
+  }
+
+  const committed = setDoc(doc(firestore, DIRECT_MESSAGES, id), {
       ...common,
       dmId: scope.threadId,
       senderId: author.id,
       senderUsername: author.username,
       senderAvatar: author.avatar || ''
     });
-    quietly('thread activity', updateDoc(doc(firestore, THREADS, scope.threadId), {
-      lastMessageAt: createdAt,
-      lastMessageBy: author.id,
-      lastPreview: `${author.username}: ${preview(content, common.attachments, common.imageUrl)}`.slice(0, 140),
-      updatedAt: createdAt
-    }));
-  }
-  return id;
+  const summary = common.poll ? `📊 ${common.poll.question}` : preview(content, common.attachments, common.imageUrl);
+  quietly('thread activity', updateDoc(doc(firestore, THREADS, scope.threadId), {
+    lastMessageAt: createdAt,
+    lastMessageBy: author.id,
+    lastPreview: `${author.username}: ${summary}`.slice(0, 140),
+    updatedAt: createdAt
+  }));
+  return { id, committed };
 }
 
 export async function editMessage(scope, messageId, content, { mentions, mentionEveryone } = {}) {
@@ -215,10 +232,23 @@ export async function deleteMessage(scope, messageId) {
 
 export async function toggleReaction(scope, message, emoji, userId) {
   const hasReacted = (message.reactions?.[emoji] || []).includes(userId);
+  // `lastReaction` lets the security rules check that only the caller's own
+  // entry in that one emoji changed.
   await updateDoc(
     doc(firestore, collectionFor(scope), message.id),
     new FieldPath('reactions', emoji),
-    hasReacted ? arrayRemove(userId) : arrayUnion(userId)
+    hasReacted ? arrayRemove(userId) : arrayUnion(userId),
+    'lastReaction',
+    { emoji, uid: userId }
+  );
+}
+
+/** Replaces the caller's vote on a poll (an empty selection removes it). */
+export async function votePoll(scope, messageId, userId, optionIds) {
+  await updateDoc(
+    doc(firestore, collectionFor(scope), messageId),
+    new FieldPath('pollVotes', userId),
+    optionIds.length ? optionIds : deleteField()
   );
 }
 
@@ -256,12 +286,20 @@ export async function markRead(userId, key, at = nowIso()) {
 }
 
 export function listenToMyMentions(userId, callback) {
-  const q = query(collection(firestore, MENTIONS), where('targetId', '==', userId), limit(200));
+  const q = query(collection(firestore, MENTIONS), where('targetId', '==', userId), orderBy('createdAt', 'desc'), limit(100));
   return onSnapshot(
     q,
     (snap) => callback(snap.docs.map((d) => ({ ...d.data(), docId: d.id }))),
     (err) => logWarn('listen mentions', err)
   );
+}
+
+/** Mentions stay in the inbox; reading the channel only marks them read. */
+export async function markMentionsRead(mentionDocs) {
+  if (mentionDocs.length === 0) return;
+  const batch = writeBatch(firestore);
+  mentionDocs.forEach((m) => batch.update(doc(firestore, MENTIONS, m.docId), { read: true }));
+  await batch.commit();
 }
 
 export async function clearMentions(mentionDocs) {
@@ -274,27 +312,42 @@ export async function clearMentions(mentionDocs) {
 
 const TYPING_TTL_MS = 6000;
 
-export async function setTyping(key, user) {
-  await setDoc(doc(firestore, TYPING, `${key}_${user.id}`), {
-    scopeKey: key,
+/** Fields that let the security rules check who may see a typing indicator. */
+function typingScope(scope) {
+  return scope.type === 'channel'
+    ? { scopeKey: scope.channelId, scopeType: 'server', scopeId: scope.serverId }
+    : { scopeKey: scope.threadId, scopeType: 'dm', scopeId: scope.threadId };
+}
+
+export async function setTyping(scope, user) {
+  const s = typingScope(scope);
+  await setDoc(doc(firestore, TYPING, `${s.scopeKey}_${user.id}`), {
+    ...s,
     userId: user.id,
     username: user.username,
-    expiresAt: Date.now() + TYPING_TTL_MS
+    expiresAt: Date.now() + TYPING_TTL_MS,
+    expireAt: Timestamp.fromMillis(Date.now() + 10 * 60_000)
   });
 }
 
-export async function clearTyping(key, userId) {
-  await deleteDoc(doc(firestore, TYPING, `${key}_${userId}`));
+export async function clearTyping(scope, userId) {
+  await deleteDoc(doc(firestore, TYPING, `${typingScope(scope).scopeKey}_${userId}`));
 }
 
-export function listenToTyping(key, myUserId, callback) {
+export function listenToTyping(scope, myUserId, callback) {
+  const s = typingScope(scope);
   let latest = [];
   const emit = () => {
     const now = Date.now();
     callback(latest.filter((t) => t.userId !== myUserId && t.expiresAt > now).map((t) => t.username));
   };
   const unsub = onSnapshot(
-    query(collection(firestore, TYPING), where('scopeKey', '==', key)),
+    query(
+      collection(firestore, TYPING),
+      where('scopeKey', '==', s.scopeKey),
+      where('scopeType', '==', s.scopeType),
+      where('scopeId', '==', s.scopeId)
+    ),
     (snap) => {
       latest = snap.docs.map((d) => d.data());
       emit();

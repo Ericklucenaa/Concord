@@ -24,20 +24,34 @@ import {
 } from 'firebase/firestore';
 import { logWarn } from './log';
 
-const firebaseConfig = {
-  apiKey: 'AIzaSyCHJQ3k7Xnc0bbs2n6YzCdIe6gfHmSDSjo',
-  authDomain: 'concord-3af70.firebaseapp.com',
-  projectId: 'concord-3af70',
-  storageBucket: 'concord-3af70.firebasestorage.app',
-  messagingSenderId: '585039727575',
-  appId: '1:585039727575:web:1510b9ce9761b9af2d1992'
-};
-
 const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+
+// Production project by default; a staging project can be targeted at build
+// time with VITE_FIREBASE_* (see .env.staging.example).
+const firebaseConfig = {
+  apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyCHJQ3k7Xnc0bbs2n6YzCdIe6gfHmSDSjo',
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'concord-3af70.firebaseapp.com',
+  projectId: env.VITE_FIREBASE_PROJECT_ID || 'concord-3af70',
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'concord-3af70.firebasestorage.app',
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '585039727575',
+  appId: env.VITE_FIREBASE_APP_ID || '1:585039727575:web:1510b9ce9761b9af2d1992'
+};
 const useEmulator = env.VITE_FIREBASE_EMULATOR === '1';
 const hasIndexedDB = typeof indexedDB !== 'undefined';
 
 export const app = initializeApp(firebaseConfig);
+
+// App Check (reCAPTCHA v3) for the web build only: it proves requests come
+// from the real site. The desktop app loads from file:// where reCAPTCHA
+// cannot run, so keep App Check in "monitor" mode while desktop clients exist.
+if (env.VITE_APPCHECK_SITE_KEY && typeof window !== 'undefined' && !window.electronAPI && !useEmulator) {
+  import('firebase/app-check')
+    .then(({ initializeAppCheck, ReCaptchaV3Provider }) => initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(env.VITE_APPCHECK_SITE_KEY),
+      isTokenAutoRefreshEnabled: true
+    }))
+    .catch((err) => logWarn('app check', err));
+}
 export const auth = getAuth(app);
 
 // Offline cache keeps the app usable on flaky connections and cuts repeated

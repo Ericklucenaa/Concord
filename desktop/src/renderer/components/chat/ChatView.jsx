@@ -1,8 +1,11 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Upload } from 'lucide-react';
+import {
+  ArrowDown, Upload, Reply, Pencil, Pin, PinOff, Copy, Trash2, EyeOff, SmilePlus, RotateCw, X, AlertCircle
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
 import { useUnread } from '../../context/UnreadContext';
+import { useOverlayUI } from '../../context/OverlayUIContext';
 import { useMessages, useTyping } from '../../hooks/useMessages';
 import {
   sendMessage,
@@ -10,6 +13,7 @@ import {
   deleteMessage,
   toggleReaction,
   setPinned,
+  votePoll,
   scopeKey as keyOf
 } from '../../services/cloud/messages';
 import {
@@ -22,6 +26,7 @@ import { extractMentions } from './MarkdownText';
 import MessageItem from './MessageItem';
 import MessageComposer from './MessageComposer';
 import ImageLightboxModal from '../ImageLightboxModal';
+import { PollModal } from './Polls';
 import { logWarn } from '../../services/log';
 
 const GROUP_WINDOW_MS = 5 * 60_000;
@@ -65,10 +70,16 @@ const ChatView = forwardRef(function ChatView(
 ) {
   const { user } = useAuth();
   const { showError, showConfirm, showSuccess, showToast } = useNotification();
-  const { markRead } = useUnread();
+  const { markRead, readState } = useUnread();
+  const { openMenu, openProfile } = useOverlayUI();
   const key = keyOf(scope);
   const { messages, hasMore, loadMore, loading, error } = useMessages(scope);
-  const { typingNames, notifyTyping, stopTyping } = useTyping(key, user);
+  const { typingNames, notifyTyping, stopTyping } = useTyping(scope, user);
+  const [failed, setFailed] = useState([]); // messages the server rejected
+  const [pollOpen, setPollOpen] = useState(false);
+  // "Novas mensagens" divider: where I had read up to when I opened the conversation.
+  const [dividerAt, setDividerAt] = useState(undefined);
+  const [manualUnread, setManualUnread] = useState(false);
 
   const [replyTo, setReplyTo] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -90,10 +101,17 @@ const ChatView = forwardRef(function ChatView(
   useEffect(() => {
     setReplyTo(null);
     setEditingId(null);
+    setFailed([]);
+    setDividerAt(undefined);
+    setManualUnread(false);
     lastCountRef.current = 0;
     atBottomRef.current = true;
     setAtBottom(true);
   }, [key]);
+
+  useEffect(() => {
+    if (dividerAt === undefined && !loading) setDividerAt(readState[key] || null);
+  }, [dividerAt, loading, readState, key]);
 
   // --- Scrolling -------------------------------------------------------------
 
@@ -131,12 +149,12 @@ const ChatView = forwardRef(function ChatView(
   // Mark as read when the newest message is on screen and the window is focused.
   const newestAt = messages[messages.length - 1]?.createdAt;
   useEffect(() => {
-    if (!newestAt || !atBottom) return undefined;
+    if (!newestAt || !atBottom || manualUnread) return undefined;
     const apply = () => document.hasFocus() && markRead(key, newestAt);
     apply();
     window.addEventListener('focus', apply);
     return () => window.removeEventListener('focus', apply);
-  }, [newestAt, atBottom, key, markRead]);
+  }, [newestAt, atBottom, key, markRead, manualUnread]);
 
   const jumpTo = useCallback((messageId) => {
     const el = document.getElementById(`msg-${messageId}`);
@@ -179,12 +197,24 @@ const ChatView = forwardRef(function ChatView(
     return { imageUrl, attachments };
   };
 
+  // The message appears immediately (pending); if the server rejects it, it
+  // moves to a "not sent" list with retry/discard instead of being lost.
+  const dispatch = (payload) => {
+    const { committed } = sendMessage(scope, user, payload);
+    committed.catch((err) => {
+      logWarn('send message', err);
+      setFailed((prev) => [...prev, { localId: `f-${Date.now()}-${Math.random()}`, payload, error: err?.code || err?.message }]);
+    });
+  };
+
   const handleSend = async (text, files) => {
     stopTyping();
+    setDividerAt(null);
+    setManualUnread(false);
     try {
       const { imageUrl, attachments } = files.length ? await prepareFiles(files) : { imageUrl: null, attachments: [] };
       const { ids, everyone } = scope.type === 'channel' ? extractMentions(text, membersByName) : { ids: [], everyone: false };
-      await sendMessage(scope, user, {
+      dispatch({
         content: text,
         imageUrl,
         attachments,
@@ -200,6 +230,32 @@ const ChatView = forwardRef(function ChatView(
       setUploadProgress(null);
     }
   };
+
+  const retryFailed = (item) => {
+    setFailed((prev) => prev.filter((f) => f.localId !== item.localId));
+    dispatch(item.payload);
+  };
+
+  const createPoll = async (poll) => {
+    dispatch({ content: '', poll });
+    atBottomRef.current = true;
+  };
+
+  const handleVote = useCallback((message, optionIds) => {
+    votePoll(scope, message.id, user.id, optionIds).catch((err) => {
+      logWarn('vote', err);
+      showError('Voto não registrado', 'Tente novamente.');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, user.id, showError]);
+
+  const markUnreadFrom = useCallback((message) => {
+    const idx = messages.findIndex((m) => m.id === message.id);
+    const before = idx > 0 ? messages[idx - 1].createdAt : '0';
+    setManualUnread(true);
+    setDividerAt(before);
+    markRead(key, before, { force: true });
+  }, [messages, key, markRead]);
 
   const handleSaveEdit = useCallback(async (message, text) => {
     try {
@@ -247,6 +303,20 @@ const ChatView = forwardRef(function ChatView(
     if (mine) setEditingId(mine.id);
   };
 
+  const openMessageMenu = useCallback((event, message) => {
+    const mine = message.authorId === user.id;
+    openMenu(event, [
+      { label: 'Responder', icon: Reply, onClick: () => setReplyTo(message) },
+      { label: 'Adicionar reação', icon: SmilePlus, onClick: () => handleReact(message, '👍'), hint: '👍' },
+      mine && { label: 'Editar', icon: Pencil, onClick: () => setEditingId(message.id) },
+      canPin && { label: message.pinned ? 'Desafixar' : 'Fixar mensagem', icon: message.pinned ? PinOff : Pin, onClick: () => handlePin(message) },
+      { label: 'Copiar texto', icon: Copy, onClick: () => navigator.clipboard.writeText(message.content || '') },
+      { label: 'Marcar como não lida', icon: EyeOff, onClick: () => markUnreadFrom(message) },
+      (mine || canModerate) && { separator: true },
+      (mine || canModerate) && { label: 'Excluir mensagem', icon: Trash2, danger: true, onClick: () => handleDelete(message) }
+    ]);
+  }, [user.id, openMenu, canPin, canModerate, handleReact, handlePin, handleDelete, markUnreadFrom]);
+
   const joinInvite = useCallback(async (code) => {
     try {
       const res = await onJoinInvite(code);
@@ -278,8 +348,14 @@ const ChatView = forwardRef(function ChatView(
   // --- Render ----------------------------------------------------------------
 
   const rendered = [];
+  const firstUnread = dividerAt
+    ? messages.find((m) => m.createdAt > dividerAt && m.authorId !== user.id)
+    : null;
   messages.forEach((m, i) => {
     const prev = messages[i - 1];
+    if (firstUnread && m.id === firstUnread.id) {
+      rendered.push(<div key="new-divider" className="new-divider"><span>Novas mensagens</span></div>);
+    }
     const newDay = !prev || new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
     if (newDay) rendered.push(<div key={`day-${m.id}`} className="day-separator"><span>{dayLabel(m.createdAt)}</span></div>);
     const grouped = !newDay && prev && prev.authorId === m.authorId && !m.replyTo
@@ -307,6 +383,9 @@ const ChatView = forwardRef(function ChatView(
         onOpenImage={setLightbox}
         onJumpTo={jumpTo}
         onJoinInvite={joinInvite}
+        onContextMenu={openMessageMenu}
+        onOpenProfile={openProfile}
+        onVote={handleVote}
       />
     );
   });
@@ -330,9 +409,27 @@ const ChatView = forwardRef(function ChatView(
       <div className="chat-messages" ref={listRef} onScroll={onScroll}>
         {hasMore && <div className="history-loader">Carregando mensagens anteriores…</div>}
         {!hasMore && !loading && emptyState}
-        {loading && messages.length === 0 && <div className="history-loader">Carregando mensagens…</div>}
         {error && <div className="history-loader error">Não foi possível carregar as mensagens.</div>}
+        {loading && messages.length === 0 && (
+          <div className="message-skeletons" aria-hidden>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="message-skeleton">
+                <span className="sk-avatar" />
+                <div><span className="sk-line short" /><span className={`sk-line ${i % 2 ? 'long' : ''}`} /></div>
+              </div>
+            ))}
+          </div>
+        )}
         {rendered}
+        {failed.map((f) => (
+          <div key={f.localId} className="message-failed">
+            <AlertCircle size={16} />
+            <span className="message-failed-text">{f.payload.poll ? `Enquete: ${f.payload.poll.question}` : f.payload.content || 'Anexo'}</span>
+            <span className="message-failed-label">Não enviada</span>
+            <button className="btn btn-secondary btn-sm" onClick={() => retryFailed(f)}><RotateCw size={13} /> Reenviar</button>
+            <button className="icon-btn" aria-label="Descartar" onClick={() => setFailed((prev) => prev.filter((x) => x.localId !== f.localId))}><X size={14} /></button>
+          </div>
+        ))}
       </div>
 
       {!atBottom && (
@@ -356,8 +453,11 @@ const ChatView = forwardRef(function ChatView(
         onTyping={notifyTyping}
         onEditLast={handleEditLast}
         onError={(msg) => showError('Envio de mensagem', msg)}
+        onCreatePoll={disabledReason ? undefined : () => setPollOpen(true)}
         uploadProgress={uploadProgress}
       />
+
+      {pollOpen && <PollModal onClose={() => setPollOpen(false)} onCreate={createPoll} />}
 
       {lightbox && <ImageLightboxModal isOpen imageUrl={lightbox} onClose={() => setLightbox(null)} />}
     </div>

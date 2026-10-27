@@ -34,6 +34,9 @@ jobs:
       - name: Build
         working-directory: desktop
         run: npm run build
+      - name: Unit tests
+        working-directory: desktop
+        run: npm run test:unit
       - name: Security rules & data-layer tests (Firebase emulators)
         working-directory: desktop
         run: npx --yes firebase-tools@15 emulators:exec --project demo-concord --only firestore,auth "npx vitest run"
@@ -59,6 +62,8 @@ jobs:
           VITE_TURN_URLS: ${{ secrets.VITE_TURN_URLS }}
           VITE_TURN_USERNAME: ${{ secrets.VITE_TURN_USERNAME }}
           VITE_TURN_CREDENTIAL: ${{ secrets.VITE_TURN_CREDENTIAL }}
+          VITE_TENOR_KEY: ${{ secrets.VITE_TENOR_KEY }}
+          VITE_APPCHECK_SITE_KEY: ${{ secrets.VITE_APPCHECK_SITE_KEY }}
         run: npm run build
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0

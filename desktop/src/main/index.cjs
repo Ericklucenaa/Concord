@@ -1,11 +1,11 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, shell, Tray, Menu, nativeImage, screen } = require('electron');
 const path = require('path');
 const https = require('https');
 const fs = require('fs');
 const crypto = require('crypto');
 const dns = require('dns').promises;
 const net = require('net');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const isDev = !app.isPackaged;
 const startHidden = process.argv.includes('--hidden');
@@ -13,7 +13,16 @@ const startHidden = process.argv.includes('--hidden');
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
-let shellSettings = { closeToTray: true, launchAtStartup: false, voiceMode: 'activity', pttKey: 'Backquote' };
+let shellSettings = {
+  closeToTray: true,
+  launchAtStartup: false,
+  voiceMode: 'activity',
+  pttKey: 'Backquote',
+  muteShortcut: null,
+  deafenShortcut: null,
+  overlayEnabled: false,
+  shareActivity: true
+};
 
 // ---------------------------------------------------------------------------
 // Single instance + concord:// invite links
@@ -55,10 +64,43 @@ app.on('second-instance', (_event, argv) => {
 // Window
 // ---------------------------------------------------------------------------
 
+// Size, position, monitor and maximized state survive restarts.
+const windowStateFile = () => path.join(app.getPath('userData'), 'window-state.json');
+
+function loadWindowState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(windowStateFile(), 'utf8'));
+    const visible = screen.getAllDisplays().some(({ workArea: a }) => state.x < a.x + a.width - 100 && state.x + state.width > a.x + 100
+      && state.y >= a.y - 20 && state.y < a.y + a.height - 100);
+    return visible ? state : { width: state.width, height: state.height, maximized: state.maximized };
+  } catch {
+    return {};
+  }
+}
+
+let saveStateTimer = null;
+function trackWindowState(win) {
+  const save = () => {
+    clearTimeout(saveStateTimer);
+    saveStateTimer = setTimeout(() => {
+      if (win.isDestroyed() || win.isMinimized()) return;
+      const bounds = win.isMaximized() ? win.getNormalBounds() : win.getBounds();
+      try {
+        fs.writeFileSync(windowStateFile(), JSON.stringify({ ...bounds, maximized: win.isMaximized() }));
+      } catch (err) {
+        console.warn('save window state:', err.message);
+      }
+    }, 400);
+  };
+  ['resize', 'move', 'maximize', 'unmaximize'].forEach((evt) => win.on(evt, save));
+}
+
 function createWindow() {
+  const saved = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: Math.max(980, saved.width || 1280),
+    height: Math.max(620, saved.height || 820),
+    ...(Number.isFinite(saved.x) && Number.isFinite(saved.y) ? { x: saved.x, y: saved.y } : {}),
     minWidth: 980,
     minHeight: 620,
     frame: false,
@@ -105,6 +147,9 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  mainWindow.on('focus', () => mainWindow?.flashFrame(false));
+  if (saved.maximized && !startHidden) mainWindow.maximize();
+  trackWindowState(mainWindow);
 
   setupMediaHandlers(mainWindow.webContents.session);
 
@@ -198,6 +243,20 @@ ipcMain.handle('window:is-maximized', () => (mainWindow ? mainWindow.isMaximized
 ipcMain.handle('window:close', () => mainWindow?.close());
 ipcMain.handle('app:get-version', () => app.getVersion());
 
+// Unread mentions badge on the taskbar icon (renderer draws the image).
+ipcMain.handle('app:set-badge', (_event, count, dataUrl) => {
+  if (!mainWindow || process.platform !== 'win32') return;
+  if (count > 0 && typeof dataUrl === 'string' && dataUrl.startsWith('data:image/png;base64,')) {
+    mainWindow.setOverlayIcon(nativeImage.createFromDataURL(dataUrl), `${count} não lidas`);
+  } else {
+    mainWindow.setOverlayIcon(null, '');
+  }
+});
+
+ipcMain.handle('app:flash-frame', () => {
+  if (mainWindow && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+});
+
 ipcMain.handle('app:open-external', (_event, url) => {
   if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url);
 });
@@ -208,7 +267,9 @@ ipcMain.handle('app:apply-settings', (_event, settings) => {
   if (app.isPackaged) {
     app.setLoginItemSettings({ openAtLogin: Boolean(shellSettings.launchAtStartup), args: ['--hidden'] });
   }
-  configurePushToTalk();
+  configureHook();
+  syncOverlay();
+  configureGameDetection();
   return true;
 });
 
@@ -245,16 +306,32 @@ function sendPtt(pressed) {
   mainWindow?.webContents.send('ptt:state', pressed);
 }
 
-function configurePushToTalk() {
+function shortcutMatcher(shortcut) {
+  const keycode = uiohookKeyFor(shortcut?.code);
+  if (keycode === null) return null;
+  return (e) => e.keycode === keycode && Boolean(e.ctrlKey) === Boolean(shortcut.ctrl)
+    && Boolean(e.shiftKey) === Boolean(shortcut.shift) && Boolean(e.altKey) === Boolean(shortcut.alt);
+}
+
+/** Push-to-talk plus the configurable global mute/deafen shortcuts. */
+function configureHook() {
   if (!uiohook) return;
   const keycode = uiohookKeyFor(shellSettings.pttKey);
-  const enabled = shellSettings.voiceMode === 'ptt' && keycode !== null;
+  const ptt = shellSettings.voiceMode === 'ptt' && keycode !== null;
+  const shortcuts = [
+    [shortcutMatcher(shellSettings.muteShortcut), 'toggleMute'],
+    [shortcutMatcher(shellSettings.deafenShortcut), 'toggleDeafen']
+  ].filter(([match]) => match);
+  const enabled = ptt || shortcuts.length > 0;
 
   uiohook.removeAllListeners('keydown');
   uiohook.removeAllListeners('keyup');
   if (enabled) {
-    uiohook.on('keydown', (e) => e.keycode === keycode && sendPtt(true));
-    uiohook.on('keyup', (e) => e.keycode === keycode && sendPtt(false));
+    uiohook.on('keydown', (e) => {
+      if (ptt && e.keycode === keycode) sendPtt(true);
+      shortcuts.forEach(([match, action]) => match(e) && mainWindow?.webContents.send('shortcut:action', action));
+    });
+    if (ptt) uiohook.on('keyup', (e) => e.keycode === keycode && sendPtt(false));
     if (!hookStarted) {
       uiohook.start();
       hookStarted = true;
@@ -263,6 +340,179 @@ function configurePushToTalk() {
     uiohook.stop();
     hookStarted = false;
     sendPtt(false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-game overlay: a click-through, always-on-top window listing who is in
+// the call and who is speaking. Works over windowed/borderless games.
+// ---------------------------------------------------------------------------
+
+let overlayWindow = null;
+let overlayState = null;
+
+function createOverlayWindow() {
+  const { workArea } = screen.getPrimaryDisplay();
+  overlayWindow = new BrowserWindow({
+    x: workArea.x + 16,
+    y: workArea.y + 16,
+    width: 260,
+    height: 360,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      partition: 'persist:concord'
+    }
+  });
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  overlayWindow.setIgnoreMouseEvents(true);
+  if (isDev) {
+    overlayWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173'}#overlay`);
+  } else {
+    overlayWindow.loadFile(path.join(__dirname, '../../dist/index.html'), { hash: 'overlay' });
+  }
+  overlayWindow.webContents.on('did-finish-load', () => overlayWindow?.webContents.send('overlay:state', overlayState));
+  overlayWindow.on('closed', () => {
+    overlayWindow = null;
+  });
+}
+
+function syncOverlay() {
+  const wanted = Boolean(shellSettings.overlayEnabled && overlayState?.users?.length);
+  if (!wanted) {
+    overlayWindow?.hide();
+    return;
+  }
+  if (!overlayWindow) createOverlayWindow();
+  overlayWindow.webContents.send('overlay:state', overlayState);
+  if (!overlayWindow.isVisible()) overlayWindow.showInactive();
+}
+
+ipcMain.handle('overlay:update', (event, state) => {
+  if (event.sender !== mainWindow?.webContents) return;
+  overlayState = state && Array.isArray(state.users) ? {
+    channel: String(state.channel || '').slice(0, 100),
+    users: state.users.slice(0, 12).map((u) => ({
+      id: String(u.id || ''),
+      username: String(u.username || '').slice(0, 40),
+      avatar: typeof u.avatar === 'string' && /^(https:|data:image\/)/.test(u.avatar) ? u.avatar : '',
+      speaking: Boolean(u.speaking),
+      muted: Boolean(u.muted),
+      deafened: Boolean(u.deafened)
+    }))
+  } : null;
+  syncOverlay();
+});
+
+// ---------------------------------------------------------------------------
+// "Playing now": polls the process list for known games (Windows only).
+// ---------------------------------------------------------------------------
+
+const KNOWN_GAMES = {
+  'valorant-win64-shipping.exe': 'VALORANT',
+  'leagueoflegends.exe': 'League of Legends',
+  'league of legends.exe': 'League of Legends',
+  'cs2.exe': 'Counter-Strike 2',
+  'csgo.exe': 'Counter-Strike: Global Offensive',
+  'fortniteclient-win64-shipping.exe': 'Fortnite',
+  'minecraft.windows.exe': 'Minecraft',
+  'robloxplayerbeta.exe': 'Roblox',
+  'gta5.exe': 'Grand Theft Auto V',
+  'gta5_enhanced.exe': 'Grand Theft Auto V',
+  'rdr2.exe': 'Red Dead Redemption 2',
+  'r5apex.exe': 'Apex Legends',
+  'r5apex_dx12.exe': 'Apex Legends',
+  'dota2.exe': 'Dota 2',
+  'overwatch.exe': 'Overwatch 2',
+  'rocketleague.exe': 'Rocket League',
+  'eldenring.exe': 'ELDEN RING',
+  'cod.exe': 'Call of Duty',
+  'pubg.exe': 'PUBG: BATTLEGROUNDS',
+  'tslgame.exe': 'PUBG: BATTLEGROUNDS',
+  'rainbowsix.exe': 'Rainbow Six Siege',
+  'rainbowsix_vulkan.exe': 'Rainbow Six Siege',
+  'fc25.exe': 'EA SPORTS FC 25',
+  'fc26.exe': 'EA SPORTS FC 26',
+  'cyberpunk2077.exe': 'Cyberpunk 2077',
+  'witcher3.exe': 'The Witcher 3',
+  'bg3.exe': "Baldur's Gate 3",
+  'bg3_dx11.exe': "Baldur's Gate 3",
+  'terraria.exe': 'Terraria',
+  'stardew valley.exe': 'Stardew Valley',
+  'among us.exe': 'Among Us',
+  'deadbydaylight-win64-shipping.exe': 'Dead by Daylight',
+  'hollow_knight.exe': 'Hollow Knight',
+  'helldivers2.exe': 'HELLDIVERS 2',
+  'palworld-win64-shipping.exe': 'Palworld',
+  'lethal company.exe': 'Lethal Company',
+  'genshinimpact.exe': 'Genshin Impact',
+  'zenlesszonezero.exe': 'Zenless Zone Zero',
+  'starrail.exe': 'Honkai: Star Rail',
+  'wow.exe': 'World of Warcraft',
+  'hearthstone.exe': 'Hearthstone',
+  'diablo iv.exe': 'Diablo IV',
+  'destiny2.exe': 'Destiny 2',
+  'warframe.x64.exe': 'Warframe',
+  'pathofexile.exe': 'Path of Exile',
+  'pathofexile_x64.exe': 'Path of Exile',
+  'pathofexile2.exe': 'Path of Exile 2',
+  'marvel-win64-shipping.exe': 'Marvel Rivals',
+  'thefinals.exe': 'THE FINALS',
+  'rustclient.exe': 'Rust',
+  'factorio.exe': 'Factorio',
+  'ts4_x64.exe': 'The Sims 4',
+  'forzahorizon5.exe': 'Forza Horizon 5',
+  'brawlhalla.exe': 'Brawlhalla',
+  'osu!.exe': 'osu!',
+  'eurotrucks2.exe': 'Euro Truck Simulator 2',
+  'albion-online.exe': 'Albion Online',
+  'growtopia.exe': 'Growtopia'
+};
+
+let gameTimer = null;
+let currentGame = null;
+
+function detectGame() {
+  execFile('tasklist', ['/fo', 'csv', '/nh'], { windowsHide: true, timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    if (err) return;
+    let found = null;
+    for (const line of stdout.split(/\r?\n/)) {
+      const name = line.match(/^"([^"]+)"/)?.[1]?.toLowerCase();
+      if (name && KNOWN_GAMES[name]) {
+        found = KNOWN_GAMES[name];
+        break;
+      }
+    }
+    if (found !== currentGame) {
+      currentGame = found;
+      mainWindow?.webContents.send('game:activity', found ? { name: found } : null);
+    }
+  });
+}
+
+function configureGameDetection() {
+  const enabled = process.platform === 'win32' && shellSettings.shareActivity;
+  if (enabled && !gameTimer) {
+    detectGame();
+    gameTimer = setInterval(detectGame, 20_000);
+  } else if (!enabled && gameTimer) {
+    clearInterval(gameTimer);
+    gameTimer = null;
+    if (currentGame) {
+      currentGame = null;
+      mainWindow?.webContents.send('game:activity', null);
+    }
   }
 }
 
@@ -523,6 +773,7 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   isQuitting = true;
   if (hookStarted) uiohook?.stop();
+  overlayWindow?.destroy();
 });
 
 app.on('window-all-closed', () => {

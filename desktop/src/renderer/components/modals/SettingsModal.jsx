@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { compressImage } from '../../services/cloud/attachments';
 import { AppSettingsPanel, VoiceModeSettings } from './SettingsPanels';
+import { ProfileExtras, PrivacyAccountPanel, VoiceExtras } from './AccountPanels';
 
 const EXPIRY_OPTIONS = { '30m': 30 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, today: 24 * 60 * 60_000 };
 import { useServer } from '../../context/ServerContext';
@@ -320,6 +321,15 @@ export default function SettingsModal() {
               Notificações & App
             </button>
 
+            <button 
+              className={`btn ${activeTab === 'privacy' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ justifyContent: 'flex-start', border: 'none', padding: '8px 12px' }}
+              onClick={() => setActiveTab('privacy')}
+            >
+              <ShieldCheck size={16} />
+              Privacidade & Conta
+            </button>
+
             <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: 8 }}>
               <button 
                 className="btn btn-danger"
@@ -343,13 +353,14 @@ export default function SettingsModal() {
                 {activeTab === 'audio' && 'Configurações de Áudio & Microfone'}
                 {activeTab === 'appearance' && 'Aparência & Personalização'}
                 {activeTab === 'app' && 'Notificações & Aplicativo'}
+                {activeTab === 'privacy' && 'Privacidade & Conta'}
               </h3>
               <button className="icon-btn" onClick={() => closeModal('settings')}>
                 <X size={18} />
               </button>
             </div>
 
-            <div className="modal-body" style={{ flex: 1 }}>
+            <div className="modal-body" style={{ flex: 1, overflowX: 'hidden' }}>
               {error && <div className="auth-error">{error}</div>}
               {saveSuccess && (
                 <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
@@ -359,6 +370,7 @@ export default function SettingsModal() {
 
               {/* ACCOUNT TAB */}
               {activeTab === 'account' && (
+                <>
                 <form onSubmit={handleSaveAccount} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   {/* Hidden File Input */}
                   <input
@@ -557,14 +569,18 @@ export default function SettingsModal() {
                     </button>
                   </div>
                 </form>
+                <ProfileExtras />
+                </>
               )}
 
               {/* AUDIO & VOICE TAB */}
               {activeTab === 'app' && <AppSettingsPanel />}
+              {activeTab === 'privacy' && <PrivacyAccountPanel />}
 
               {activeTab === 'audio' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <VoiceModeSettings />
+                  <VoiceExtras />
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>Detectar Dispositivos de Áudio do Sistema</div>

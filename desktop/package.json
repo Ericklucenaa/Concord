@@ -1,6 +1,6 @@
 {
   "name": "concord-desktop",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "author": "Concord Team",
   "description": "Concord — chat, voz e transmissão de tela",
@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:emulators": "firebase emulators:exec --project demo-concord --only firestore,auth \"vitest run\"",
     "dist:win": "vite build && electron-builder --win --x64 --publish never",
-    "package:win": "npm run dist:win"
+    "package:win": "npm run dist:win",
+    "test:unit": "vitest run tests/unit"
   },
   "build": {
     "appId": "com.concord.app",
@@ -63,6 +64,7 @@
     "npmRebuild": false
   },
   "dependencies": {
+    "@sapphi-red/web-noise-suppressor": "^0.4.1",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {

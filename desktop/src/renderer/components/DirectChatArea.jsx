@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  Users, MessageSquare, Check, X, Search, Ban, UserMinus, UserPlus, LogOut, Pencil, ShieldOff
+  Users, MessageSquare, Check, X, Search, Ban, UserMinus, UserPlus, LogOut, Pencil, ShieldOff, Phone, PhoneOff
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useDM } from '../context/DMContext';
@@ -8,6 +8,9 @@ import { useServer } from '../context/ServerContext';
 import { usePresence } from '../context/PresenceContext';
 import { useNotification } from '../context/NotificationContext';
 import ChatView from './chat/ChatView';
+import VoiceRoomArea from './VoiceRoomArea';
+import { useVoice } from '../context/VoiceContext';
+import { useOverlayUI } from '../context/OverlayUIContext';
 import { SearchPanel } from './chat/SidePanels';
 import { describeThread } from '../services/cloud/dms';
 import { defaultAvatar } from '../services/cloud/util';
@@ -196,6 +199,8 @@ function FriendsDashboard() {
 
 function ThreadView({ thread }) {
   const { user } = useAuth();
+  const { activeVoiceChannel, joinVoice, leaveVoice } = useVoice();
+  const { openProfile } = useOverlayUI();
   const { blockedIds, blockUser, unblockUser, leaveGroup, renameGroup, addToGroup, removeFromGroup, friendList } = useDM();
   const { joinByCode, setActiveServer } = useServer();
   const { getStatus, profiles } = usePresence();
@@ -216,6 +221,8 @@ function ThreadView({ thread }) {
     [thread, profiles]
   );
   const scope = { type: 'dm', threadId: thread.id };
+  const inThisCall = activeVoiceChannel?.threadId === thread.id;
+  const startCall = () => joinVoice({ id: thread.id, name: info.title, threadId: thread.id });
 
   const joinInvite = async (code) => {
     const res = await joinByCode(code);
@@ -231,12 +238,25 @@ function ThreadView({ thread }) {
           {thread.isGroup ? (
             <div className="group-avatar"><Users size={16} /></div>
           ) : (
-            <Avatar src={other?.avatar} name={other?.username} status={getStatus(other?.id)} size={28} />
+            <button className="avatar-button" onClick={(e) => openProfile(other.id, e)} aria-label="Ver perfil">
+              <Avatar src={other?.avatar} name={other?.username} status={getStatus(other?.id)} size={28} />
+            </button>
           )}
           <span className="chat-header-title">{thread.isGroup ? info.title : `@${info.title}`}</span>
           {thread.isGroup && <span className="chat-header-desc">{thread.participants.length} membros</span>}
         </div>
         <div className="chat-header-actions">
+          {!blockedByMe && (
+            inThisCall ? (
+              <button className="icon-btn hover-danger" onClick={leaveVoice} title="Encerrar chamada" aria-label="Encerrar chamada">
+                <PhoneOff size={18} />
+              </button>
+            ) : (
+              <button className="icon-btn" onClick={startCall} title="Iniciar chamada de voz" aria-label="Iniciar chamada de voz">
+                <Phone size={18} />
+              </button>
+            )
+          )}
           <button className={`icon-btn ${searchOpen ? 'active' : ''}`} onClick={() => setSearchOpen((v) => !v)} title="Pesquisar">
             <Search size={18} />
           </button>
@@ -272,6 +292,12 @@ function ThreadView({ thread }) {
           )}
         </div>
       </header>
+
+      {inThisCall && (
+        <div className="dm-call">
+          <VoiceRoomArea embedded />
+        </div>
+      )}
 
       <div className="chat-body">
         <ChatView

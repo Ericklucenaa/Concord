@@ -19,6 +19,11 @@ Aplicativo de comunicação para Windows (e web) com chat de texto em tempo real
 - Transmissão de tela 720p/1080p a 30/60 FPS, com áudio do sistema opcional no Windows
 - App de desktop com bandeja do sistema, iniciar com o Windows, links `concord://` e atualização automática verificada por SHA-256
 - Atalhos: `Ctrl+K` (ir para…), `Ctrl+F` (buscar), `↑` (editar última mensagem), `Alt+↑/↓` (trocar de canal), `Ctrl+Shift+M` (microfone)
+- **v1.2:** categorias de canais com arrastar e soltar, silenciar canal/servidor e nível de notificação por servidor, divisor "Novas mensagens" e marcar como não lida, caixa de menções com selo na barra de tarefas, cartão de perfil (bio, cor, "Jogando agora"), menus de botão direito
+- **v1.2:** enquetes, mensagens de voz, GIFs (Tenor), eventos com confirmação de presença, sorteio de times, salas de voz temporárias
+- **v1.2:** chamadas de voz/vídeo em DM, câmera, supressão de ruído com IA (RNNoise), reconexão automática (ICE restart), diagnóstico de chamada, teste de microfone, estatísticas e qualidade escolhida por quem assiste a transmissão
+- **v1.2:** atalhos globais configuráveis, overlay nos jogos, janela que lembra tamanho/posição/monitor, envio de mensagens offline com reenvio
+- **v1.2:** convites com validade e limite de usos, privacidade de DM (só amigos), verificação de e-mail, exportar dados e excluir conta (LGPD), CSP, relatórios de erro
 
 ## Arquitetura
 
@@ -53,6 +58,7 @@ npm run dev:web      # só a versão web em http://localhost:5173
 cd desktop
 npm run lint             # ESLint
 npm run build            # build de produção
+npm run test:unit        # testes unitários (sem emuladores)
 npm run test:emulators   # regras de segurança + camada de dados nos emuladores do Firebase
 ```
 
@@ -61,6 +67,20 @@ O CI (GitHub Actions) roda lint, build e testes em todo push e PR. Em `main`, ta
 ### TURN (opcional)
 
 Para que voz e tela funcionem em redes restritivas (redes corporativas, 4G), configure um servidor TURN no build. Veja `desktop/.env.example`.
+
+### Outras opções de build
+
+- `VITE_TENOR_KEY` ativa o botão de GIFs; `VITE_APPCHECK_SITE_KEY` ativa o App Check na versão web (deixe em modo "monitorar" no console, porque o app de desktop não roda reCAPTCHA).
+- **Staging:** crie um segundo projeto Firebase, copie `desktop/.env.staging.example` para `desktop/.env.staging` e rode `npx vite build --mode staging`.
+
+### Operação
+
+```bash
+node scripts/backup-firestore.mjs        # cópia de todas as coleções em backups/ (rode toda semana)
+node scripts/error-reports.mjs --days 7  # erros enviados pelos clientes, agrupados
+```
+
+Dados efêmeros (sinalização de voz/tela, "digitando…", soundboard) são apagados pelos próprios clientes e carregam o campo `expireAt`. Se o projeto passar para o plano Blaze, ative uma política TTL nesse campo (Console → Firestore → TTL) para limpar o que sobrar de clientes que fecharam no meio.
 
 ## Publicando
 

@@ -9,6 +9,7 @@ import {
   leaveVoicePresence,
   disconnectFromVoice,
   listenToServerVoice,
+  listenToThreadVoice,
   sendVoiceSignal,
   listenToVoiceSignals,
   playSoundboard,
@@ -16,6 +17,8 @@ import {
   VOICE_HEARTBEAT_MS
 } from '../services/cloud/voice';
 import { soundSynthesizer } from '../services/soundEffects';
+import { createDenoisedStream } from '../services/noiseSuppression';
+import { createTempChannel, deleteTempChannel } from '../services/cloud/servers';
 import { useSettings } from '../services/settings';
 import { logWarn, quietly } from '../services/log';
 
@@ -23,6 +26,16 @@ const VoiceContext = createContext(null);
 
 const SPEAKING_THRESHOLD = 14;
 const STATS_INTERVAL_MS = 4000;
+const CAMERA_MAX_BITRATE = 1_200_000;
+
+/** Map key of a call: the server id, or `dm:<threadId>` for DM calls. */
+function roomKey(channel) {
+  return channel?.threadId ? `dm:${channel.threadId}` : channel?.serverId || null;
+}
+
+function videoTransceiver(pc) {
+  return pc.getTransceivers().find((t) => t.receiver?.track?.kind === 'video');
+}
 
 function readBool(key) {
   return localStorage.getItem(key) !== 'false';
@@ -54,7 +67,7 @@ function toParticipant(p) {
 export function VoiceProvider({ children }) {
   const { showError, showToast } = useNotification();
   const { user } = useAuth();
-  const { activeServer, servers } = useServer();
+  const { activeServer, servers, tempChannels } = useServer();
   const [settings] = useSettings();
   const userId = user?.id;
 
@@ -69,6 +82,11 @@ export function VoiceProvider({ children }) {
   const [connectionStats, setConnectionStats] = useState(new Map()); // userId -> { rtt, loss }
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [localCameraStream, setLocalCameraStream] = useState(null);
+  const [remoteVideos, setRemoteVideos] = useState(new Map()); // userId -> MediaStream (camera)
+  const [aiNoiseSuppression, setAiNoiseSuppression] = useState(() => localStorage.getItem('concord_ai_noise') !== 'false');
+  const cameraTrackRef = useRef(null);
+  const rawMicRef = useRef(null);
+  const denoiseRef = useRef(null);
 
   const [inputDevices, setInputDevices] = useState([]);
   const [outputDevices, setOutputDevices] = useState([]);
@@ -248,10 +266,13 @@ export function VoiceProvider({ children }) {
     const existing = localStreamRef.current;
     if (!force && existing?.getAudioTracks()[0]?.readyState === 'live') return existing;
     existing?.getTracks().forEach((t) => t.stop());
+    rawMicRef.current?.getTracks().forEach((t) => t.stop());
+    denoiseRef.current?.dispose();
+    denoiseRef.current = null;
     localStreamRef.current = null;
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const raw = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: selectedInputDevice ? { ideal: selectedInputDevice } : undefined,
           echoCancellation,
@@ -262,6 +283,16 @@ export function VoiceProvider({ children }) {
         },
         video: false
       });
+      rawMicRef.current = raw;
+      let stream = raw;
+      if (aiNoiseSuppression) {
+        try {
+          denoiseRef.current = await createDenoisedStream(raw);
+          stream = denoiseRef.current.stream;
+        } catch (err) {
+          logWarn('ai noise suppression', err);
+        }
+      }
       localStreamRef.current = stream;
       applyTransmitState(false);
       startSpeakingDetector(stream);
@@ -295,11 +326,12 @@ export function VoiceProvider({ children }) {
   const updateNoiseSuppression = (val) => { persistToggle(setNoiseSuppression, 'concord_noise_suppression')(val); };
   const updateEchoCancellation = (val) => { persistToggle(setEchoCancellation, 'concord_echo_cancellation')(val); };
   const updateAutoGainControl = (val) => { persistToggle(setAutoGainControl, 'concord_auto_gain')(val); };
+  const updateAiNoiseSuppression = (val) => { persistToggle(setAiNoiseSuppression, 'concord_ai_noise')(val); };
 
   useEffect(() => {
     restartMicIfActive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [noiseSuppression, echoCancellation, autoGainControl, selectedInputDevice]);
+  }, [noiseSuppression, echoCancellation, autoGainControl, selectedInputDevice, aiNoiseSuppression]);
 
   // ---------------------------------------------------------------------------
   // Remote audio: Web Audio graph per peer (volume up to 200%, speaking detection)
@@ -388,31 +420,95 @@ export function VoiceProvider({ children }) {
   // ---------------------------------------------------------------------------
 
   const closePeer = (remoteUserId) => {
-    peersRef.current.get(remoteUserId)?.close();
+    const pc = peersRef.current.get(remoteUserId);
+    clearTimeout(pc?.__restartTimer);
+    pc?.close();
     peersRef.current.delete(remoteUserId);
     iceQueuesRef.current.delete(remoteUserId);
     lastStatsRef.current.delete(remoteUserId);
     detachRemote(remoteUserId);
+    setRemoteVideos((prev) => {
+      if (!prev.has(remoteUserId)) return prev;
+      const next = new Map(prev);
+      next.delete(remoteUserId);
+      return next;
+    });
   };
 
-  const createPeer = (remoteUserId, channelId) => {
+  /** Puts my camera (or nothing) on the video sender of a peer connection. */
+  const attachCamera = (pc) => {
+    const transceiver = videoTransceiver(pc);
+    if (!transceiver) return;
+    transceiver.direction = 'sendrecv';
+    transceiver.sender.replaceTrack(cameraTrackRef.current || null).catch((err) => logWarn('camera track', err));
+    try {
+      const params = transceiver.sender.getParameters();
+      if (!params.encodings?.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = CAMERA_MAX_BITRATE;
+      transceiver.sender.setParameters(params).catch(() => {});
+    } catch {
+      // Parameters are only available once negotiated; the default bitrate is fine.
+    }
+  };
+
+  // Initiator only: renegotiate the same connection with new ICE candidates.
+  const restartIce = async (remoteUserId, channelId) => {
+    const pc = peersRef.current.get(remoteUserId);
+    if (!pc || pc.signalingState !== 'stable') return;
+    try {
+      pc.restartIce();
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      await sendVoiceSignal(channelId, userId, remoteUserId, 'offer', { type: offer.type, sdp: offer.sdp, session: pc.__session });
+    } catch (err) {
+      logWarn('ice restart', err);
+    }
+  };
+
+  const createPeer = (remoteUserId, channelId, { initiator = false } = {}) => {
     if (peersRef.current.has(remoteUserId)) return peersRef.current.get(remoteUserId);
     const pc = new RTCPeerConnection({ iceServers: getIceServers(), iceCandidatePoolSize: 4 });
+    pc.__session = Math.random().toString(36).slice(2);
     const stream = localStreamRef.current;
     stream?.getAudioTracks().forEach((track) => pc.addTrack(track, stream));
+    // A video slot exists from the start, so turning the camera on or off
+    // later is a track swap and never needs renegotiation.
+    if (initiator) {
+      pc.addTransceiver('video', { direction: 'sendrecv' });
+      attachCamera(pc);
+    }
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
       quietly('send candidate', sendVoiceSignal(channelId, userId, remoteUserId, 'candidate', event.candidate.toJSON()));
     };
     pc.ontrack = (event) => {
+      if (event.track.kind === 'video') {
+        const videoStream = new MediaStream([event.track]);
+        setRemoteVideos((prev) => new Map(prev).set(remoteUserId, videoStream));
+        return;
+      }
       attachRemoteStream(remoteUserId, event.streams[0] || new MediaStream([event.track]));
     };
-    pc.onconnectionstatechange = () => {
-      // The initiator retries a failed connection once things settle.
-      if (pc.connectionState === 'failed' && String(userId) < String(remoteUserId) && activeRef.current?.id === channelId) {
-        closePeer(remoteUserId);
-        setTimeout(() => initiateOffer(remoteUserId, channelId), 1500);
+    // Network hiccups: the initiator restarts ICE on the same connection;
+    // if that does not recover it, the connection is rebuilt from scratch.
+    pc.oniceconnectionstatechange = () => {
+      const isInitiator = String(userId) < String(remoteUserId);
+      if (!isInitiator || activeRef.current?.id !== channelId) return;
+      const state = pc.iceConnectionState;
+      if (state === 'disconnected' || state === 'failed') {
+        clearTimeout(pc.__restartTimer);
+        pc.__restartTimer = setTimeout(() => {
+          if (['disconnected', 'failed'].includes(pc.iceConnectionState)) restartIce(remoteUserId, channelId);
+          pc.__restartTimer = setTimeout(() => {
+            if (['disconnected', 'failed'].includes(pc.iceConnectionState) && activeRef.current?.id === channelId) {
+              closePeer(remoteUserId);
+              initiateOffer(remoteUserId, channelId);
+            }
+          }, 15_000);
+        }, state === 'failed' ? 0 : 3000);
+      } else if (state === 'connected' || state === 'completed') {
+        clearTimeout(pc.__restartTimer);
       }
     };
     peersRef.current.set(remoteUserId, pc);
@@ -431,10 +527,10 @@ export function VoiceProvider({ children }) {
     if (!remoteUserId || remoteUserId === userId || peersRef.current.has(remoteUserId)) return;
     try {
       await ensureLocalStream();
-      const pc = createPeer(remoteUserId, channelId);
+      const pc = createPeer(remoteUserId, channelId, { initiator: true });
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
-      await sendVoiceSignal(channelId, userId, remoteUserId, 'offer', { type: offer.type, sdp: offer.sdp });
+      await sendVoiceSignal(channelId, userId, remoteUserId, 'offer', { type: offer.type, sdp: offer.sdp, session: pc.__session });
     } catch (err) {
       logWarn('voice offer', err);
     }
@@ -446,12 +542,18 @@ export function VoiceProvider({ children }) {
     const from = sig.senderId;
     try {
       if (sig.type === 'offer') {
-        // An offer always comes from a fresh connection on the other side,
-        // so it replaces whatever we had with this peer.
-        closePeer(from);
-        await ensureLocalStream();
-        const pc = createPeer(from, active.id);
-        await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+        // Same session = ICE restart/renegotiation on the existing connection.
+        // A new session means the other side rebuilt its connection.
+        const existing = peersRef.current.get(from);
+        let pc = existing;
+        if (!existing || existing.__remoteSession !== sig.data.session) {
+          closePeer(from);
+          await ensureLocalStream();
+          pc = createPeer(from, active.id);
+          pc.__remoteSession = sig.data.session;
+        }
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: sig.data.type, sdp: sig.data.sdp }));
+        attachCamera(pc);
         await drainIce(from, pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -459,7 +561,7 @@ export function VoiceProvider({ children }) {
       } else if (sig.type === 'answer') {
         const pc = peersRef.current.get(from);
         if (pc && pc.signalingState === 'have-local-offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: sig.data.type, sdp: sig.data.sdp }));
           await drainIce(from, pc);
         }
       } else if (sig.type === 'candidate') {
@@ -487,32 +589,31 @@ export function VoiceProvider({ children }) {
   // Voice presence for the visible server and the server I'm connected to
   // ---------------------------------------------------------------------------
 
-  const watchedServers = useMemo(
-    () => Array.from(new Set([activeServer?.id, voiceServerId].filter(Boolean))).sort().join(','),
-    [activeServer?.id, voiceServerId]
+  const voiceRoomKey = roomKey(activeVoiceChannel);
+  const watchedRooms = useMemo(
+    () => Array.from(new Set([activeServer?.id, voiceRoomKey].filter(Boolean))).sort().join(','),
+    [activeServer?.id, voiceRoomKey]
   );
 
   useEffect(() => {
-    if (!watchedServers || !userId) {
+    if (!watchedRooms || !userId) {
       setVoiceByServer(new Map());
       return undefined;
     }
-    const unsubs = watchedServers.split(',').map((serverId) =>
-      listenToServerVoice(serverId, (byChannel) => {
-        setVoiceByServer((prev) => {
-          const next = new Map(prev);
-          next.set(serverId, byChannel);
-          return next;
-        });
-      })
-    );
+    const unsubs = watchedRooms.split(',').map((key) => {
+      const store = (byChannel) => setVoiceByServer((prev) => new Map(prev).set(key, byChannel));
+      return key.startsWith('dm:') ? listenToThreadVoice(key.slice(3), store) : listenToServerVoice(key, store);
+    });
     return () => unsubs.forEach((u) => u());
-  }, [watchedServers, userId]);
+  }, [watchedRooms, userId]);
+
+  const voiceByServerRef = useRef(voiceByServer);
+  voiceByServerRef.current = voiceByServer;
 
   const currentParticipants = useMemo(() => {
     if (!activeVoiceChannel) return [];
-    return (voiceByServer.get(activeVoiceChannel.serverId)?.get(activeVoiceChannel.id) || []).map(toParticipant);
-  }, [voiceByServer, activeVoiceChannel]);
+    return (voiceByServer.get(voiceRoomKey)?.get(activeVoiceChannel.id) || []).map(toParticipant);
+  }, [voiceByServer, activeVoiceChannel, voiceRoomKey]);
 
   // Connect to newcomers, drop peers who left, and notice if I was disconnected.
   const participantKey = currentParticipants.map((p) => p.userId).sort().join(',');
@@ -563,6 +664,7 @@ export function VoiceProvider({ children }) {
           let rtt = null;
           let lost = 0;
           let received = 0;
+          let jitter = null;
           report.forEach((s) => {
             if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime !== undefined) {
               rtt = Math.round(s.currentRoundTripTime * 1000);
@@ -570,6 +672,7 @@ export function VoiceProvider({ children }) {
             if (s.type === 'inbound-rtp' && s.kind === 'audio') {
               lost += s.packetsLost || 0;
               received += s.packetsReceived || 0;
+              if (typeof s.jitter === 'number') jitter = Math.round(s.jitter * 1000);
             }
           });
           const prev = lastStatsRef.current.get(id) || { lost: 0, received: 0 };
@@ -577,7 +680,7 @@ export function VoiceProvider({ children }) {
           const dReceived = Math.max(0, received - prev.received);
           lastStatsRef.current.set(id, { lost, received });
           const loss = dLost + dReceived > 0 ? Math.round((dLost / (dLost + dReceived)) * 1000) / 10 : 0;
-          next.set(id, { rtt, loss, state: pc.connectionState });
+          next.set(id, { rtt, loss, jitter, state: pc.connectionState });
         } catch (err) {
           logWarn('voice stats', err);
         }
@@ -612,6 +715,12 @@ export function VoiceProvider({ children }) {
     stopSpeakingDetector();
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     localStreamRef.current = null;
+    rawMicRef.current?.getTracks().forEach((t) => t.stop());
+    rawMicRef.current = null;
+    denoiseRef.current?.dispose();
+    denoiseRef.current = null;
+    cameraTrackRef.current = null;
+    setRemoteVideos(new Map());
     Array.from(peersRef.current.keys()).forEach(closePeer);
     outputCtxRef.current?.close().catch(() => {});
     outputCtxRef.current = null;
@@ -623,7 +732,11 @@ export function VoiceProvider({ children }) {
   }
 
   const leaveVoice = useCallback(() => {
-    if (!activeRef.current) return;
+    const active = activeRef.current;
+    if (!active) return;
+    // The last person out of an auto-created room removes it.
+    const others = (voiceByServerRef.current.get(roomKey(active))?.get(active.id) || []).filter((p) => p.userId !== userId);
+    if (active.temporary && others.length === 0) quietly('delete temp room', deleteTempChannel(active.id));
     leavingRef.current = true;
     quietly('leave voice', leaveVoicePresence(userId));
     teardown();
@@ -633,10 +746,24 @@ export function VoiceProvider({ children }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
-  const joinVoice = async (channel) => {
-    if (!channel || !user) return;
-    const serverId = channel.serverId || activeServer?.id;
-    if (!serverId) return;
+  /**
+   * Joins a server voice channel, a lobby ("create room" channel, which
+   * spawns a temporary room) or a DM call ({ id, name, threadId }).
+   */
+  const joinVoice = async (requested) => {
+    if (!requested || !user) return;
+    let channel = requested;
+    const serverId = channel.threadId ? null : channel.serverId || activeServer?.id;
+    if (!serverId && !channel.threadId) return;
+    if (channel.isLobby) {
+      try {
+        channel = { ...(await createTempChannel(serverId, channel, user)), serverId };
+      } catch (err) {
+        logWarn('create temp room', err);
+        showError('Sala temporária', 'Não foi possível criar sua sala.');
+        return;
+      }
+    }
     if (activeRef.current?.id === channel.id) return;
     if (activeRef.current) {
       Array.from(peersRef.current.keys()).forEach(closePeer);
@@ -652,7 +779,10 @@ export function VoiceProvider({ children }) {
     setActiveVoiceChannel(target);
     leavingRef.current = true;
     try {
-      await joinVoicePresence(user, serverId, channel.id, { isMuted, isDeafened });
+      const room = channel.threadId
+        ? { threadId: channel.threadId, channelId: channel.id }
+        : { serverId, channelId: channel.id };
+      await joinVoicePresence(user, room, { isMuted, isDeafened });
     } catch (err) {
       logWarn('join voice', err);
       showError('Erro na voz', 'Não foi possível entrar no canal de voz.');
@@ -779,6 +909,14 @@ export function VoiceProvider({ children }) {
     };
   }, [settings.voiceMode, settings.pttKey, settings.pttReleaseDelayMs]);
 
+  // Global shortcuts from the desktop app (work with the window in the background).
+  const shortcutRef = useRef({});
+  useEffect(() => window.electronAPI?.onGlobalShortcut?.((action) => {
+    if (action === 'toggleMute') shortcutRef.current.toggleMute?.();
+    if (action === 'toggleDeafen') shortcutRef.current.toggleDeafen?.();
+    if (action === 'leaveVoice') shortcutRef.current.leaveVoice?.();
+  }), []);
+
   useEffect(() => {
     flags.current.isPttPressed = isPttPressed;
     applyTransmitState(hangoverRef.current.open);
@@ -796,6 +934,8 @@ export function VoiceProvider({ children }) {
     }
     if (isCameraOn) {
       localCameraStream?.getTracks().forEach((t) => t.stop());
+      cameraTrackRef.current = null;
+      peersRef.current.forEach((pc) => attachCamera(pc));
       setLocalCameraStream(null);
       setIsCameraOn(false);
       publishState({ isCameraOn: false });
@@ -806,6 +946,8 @@ export function VoiceProvider({ children }) {
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
         audio: false
       });
+      cameraTrackRef.current = stream.getVideoTracks()[0];
+      peersRef.current.forEach((pc) => attachCamera(pc));
       setLocalCameraStream(stream);
       setIsCameraOn(true);
       publishState({ isCameraOn: true });
@@ -826,17 +968,29 @@ export function VoiceProvider({ children }) {
   };
 
   const playSound = (soundId) => {
-    if (!activeVoiceChannel || !user) return;
+    if (!activeVoiceChannel?.serverId || !user) return;
     soundSynthesizer.play(soundId);
     quietly('soundboard', playSoundboard(activeVoiceChannel.serverId, activeVoiceChannel.id, user, soundId));
   };
 
   useEffect(() => {
-    if (!activeVoiceChannel?.id) return undefined;
+    if (!activeVoiceChannel?.id || !activeVoiceChannel.serverId) return undefined;
     return listenToSoundboard(activeVoiceChannel.serverId, activeVoiceChannel.id, (data) => {
       if (data.userId !== userId && !flags.current.isDeafened) soundSynthesizer.play(data.soundId);
     });
   }, [activeVoiceChannel?.id, activeVoiceChannel?.serverId, userId]);
+
+  // Empty auto-created rooms are removed (e.g. the last person crashed).
+  useEffect(() => {
+    const byChannel = voiceByServer.get(activeServer?.id);
+    if (!byChannel) return;
+    tempChannels.forEach((c) => {
+      const occupied = (byChannel.get(c.id) || []).length > 0;
+      if (!occupied && Date.now() - (c.createdAt || 0) > 60_000 && activeVoiceChannel?.id !== c.id) {
+        quietly('cleanup temp room', deleteTempChannel(c.id));
+      }
+    });
+  }, [tempChannels, voiceByServer, activeServer?.id, activeVoiceChannel?.id]);
 
   // ---------------------------------------------------------------------------
   // Derived participant lists
@@ -862,10 +1016,32 @@ export function VoiceProvider({ children }) {
     return out;
   }, [voiceByServer, activeServer?.id, userId, isMuted, isDeafened, isSpeaking, remoteSpeaking, activeVoiceChannel?.id]);
 
+  shortcutRef.current = { toggleMute, toggleDeafen, leaveVoice };
+
+  // In-game overlay (desktop): who is in the call and who is talking.
+  const overlayKey = JSON.stringify([
+    activeVoiceChannel?.name,
+    voiceUsers.map((u) => [u.userId, u.username, u.isSpeaking, u.isMuted, u.isDeafened])
+  ]);
+  useEffect(() => {
+    window.electronAPI?.updateOverlay?.(activeVoiceChannel
+      ? {
+          channel: activeVoiceChannel.name,
+          users: voiceUsers.map((u) => ({
+            id: u.userId, username: u.username, avatar: u.avatar, speaking: u.isSpeaking, muted: u.isMuted, deafened: u.isDeafened
+          }))
+        }
+      : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayKey]);
+
   return (
     <VoiceContext.Provider
       value={{
         activeVoiceChannel,
+        remoteVideos,
+        aiNoiseSuppression,
+        updateAiNoiseSuppression,
         voiceServer,
         voiceUsers,
         voiceChannelUsersMap,

@@ -9,6 +9,7 @@ rules_version = '2';
 //   * Channel messages carry `serverId` so every read/write can be checked
 //     against the server's membership and per-channel permissions.
 //   * DMs (1-on-1 and groups) live in threads with an explicit participant list.
+//   * Voice/screen signaling is only allowed between people in the same call.
 //   * Anything not matched below is denied.
 //
 // Covered by tests in desktop/tests/rules.test.js (Firestore emulator).
@@ -36,12 +37,16 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys();
     }
 
+    function docPath(collection, id) {
+      return /databases/$(database)/documents/$(collection)/$(id);
+    }
+
     function serverDoc(serverId) {
-      return get(/databases/$(database)/documents/concord_servers/$(serverId)).data;
+      return get(docPath('concord_servers', serverId)).data;
     }
 
     function threadDoc(threadId) {
-      return get(/databases/$(database)/documents/concord_dm_threads/$(threadId)).data;
+      return get(docPath('concord_dm_threads', threadId)).data;
     }
 
     function roleIn(s) {
@@ -89,11 +94,33 @@ service cloud.firestore {
       return t.participants[0] == uid() ? t.participants[1] : t.participants[0];
     }
 
-    // The other side of a 1-on-1 conversation has not blocked me.
-    function notBlockedIn(t) {
-      return t.isGroup == true
-        || !exists(/databases/$(database)/documents/concord_blocks/$(otherParticipant(t)))
-        || !(uid() in get(/databases/$(database)/documents/concord_blocks/$(otherParticipant(t))).data.blockedIds);
+    function pairId(a, b) {
+      return a < b ? a + '_' + b : b + '_' + a;
+    }
+
+    function areFriends(a, b) {
+      return exists(docPath('concord_friends', pairId(a, b)))
+        && get(docPath('concord_friends', pairId(a, b))).data.status == 'accepted';
+    }
+
+    // `target` has blocked `actor`.
+    function hasBlocked(target, actor) {
+      return exists(docPath('concord_blocks', target))
+        && actor in get(docPath('concord_blocks', target)).data.get('blockedIds', []);
+    }
+
+    // `target` only accepts DMs from friends.
+    function friendsOnlyDMs(target) {
+      return exists(docPath('concord_users', target))
+        && get(docPath('concord_users', target)).data.get('dmPolicy', 'everyone') == 'friends';
+    }
+
+    // Sending to a 1-on-1 conversation: not blocked, and allowed by the other's DM policy.
+    function canDirectMessage(t) {
+      return t.isGroup == true || (
+        !hasBlocked(otherParticipant(t), uid())
+        && (!friendsOnlyDMs(otherParticipant(t)) || areFriends(uid(), otherParticipant(t)))
+      );
     }
 
     function canAccessScope(scopeType, scopeId) {
@@ -101,14 +128,52 @@ service cloud.firestore {
         || (scopeType == 'dm' && isParticipant(threadDoc(scopeId)));
     }
 
+    // Exactly the caller added or removed themselves from list `after` vs `before`.
+    function onlyCallerChanged(after, before) {
+      return after.toSet().difference(before.toSet()).hasOnly([uid()])
+        && before.toSet().difference(after.toSet()).hasOnly([uid()]);
+    }
+
+    // A reaction toggle touches one emoji, and only the caller's own entry in it.
+    // The client records which emoji it toggled in `lastReaction`.
+    function isOwnReactionToggle() {
+      return changedKeys().hasOnly(['reactions', 'lastReaction'])
+        && incoming().lastReaction.uid == uid()
+        && incoming().reactions.diff(resource.data.get('reactions', {})).affectedKeys()
+             .hasOnly([incoming().lastReaction.emoji])
+        && onlyCallerChanged(
+             incoming().reactions.get(incoming().lastReaction.emoji, []),
+             resource.data.get('reactions', {}).get(incoming().lastReaction.emoji, []));
+    }
+
+    // A poll vote only changes the caller's own entry in `pollVotes`.
+    function isOwnPollVote() {
+      return changedKeys().hasOnly(['pollVotes'])
+        && resource.data.get('poll', null) != null
+        && incoming().pollVotes.diff(resource.data.get('pollVotes', {})).affectedKeys().hasOnly([uid()]);
+    }
+
+    function presenceOf(userId) {
+      return get(docPath('concord_voice_presence', userId)).data;
+    }
+
+    // Both users are currently in the same call (`channelId`).
+    function inSameCall(a, b, channelId) {
+      return exists(docPath('concord_voice_presence', a))
+        && exists(docPath('concord_voice_presence', b))
+        && presenceOf(a).channelId == channelId
+        && presenceOf(b).channelId == channelId;
+    }
+
     // ---------------------------------------------------------------------
-    // Users & nicknames
+    // Users, nicknames, private settings
     // ---------------------------------------------------------------------
 
     match /concord_users/{userId} {
       allow read: if signedIn();
-      allow create, update: if signedIn() && uid() == userId && incoming().id == userId;
-      allow delete: if false;
+      allow create, update: if signedIn() && uid() == userId && incoming().id == userId
+        && incoming().get('bio', '').size() <= 190;
+      allow delete: if signedIn() && uid() == userId;
     }
 
     // Nickname registry (doc id = lowercase nickname). Readable by id before
@@ -131,6 +196,20 @@ service cloud.firestore {
       allow read, write: if signedIn() && uid() == userId;
     }
 
+    // Notification preferences (muted channels/servers, per-server level).
+    match /concord_user_settings/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    // Client error reports (write-only; read with admin credentials).
+    match /concord_error_reports/{reportId} {
+      allow create: if signedIn()
+        && incoming().userId == uid()
+        && incoming().message is string && incoming().message.size() <= 2000
+        && incoming().get('stack', '').size() <= 8000;
+      allow read, update, delete: if false;
+    }
+
     // ---------------------------------------------------------------------
     // Servers
     // ---------------------------------------------------------------------
@@ -142,7 +221,16 @@ service cloud.firestore {
         && incoming().roles[uid()] == 'owner';
     }
 
-    // Joining requires an existing invite code for this exact server.
+    // The invite used to join is valid and its use counter is bumped in the same batch.
+    function isUsableInvite(code, serverId) {
+      let before = get(docPath('concord_invites', code)).data;
+      let after = getAfter(docPath('concord_invites', code)).data;
+      return before.serverId == serverId
+        && (before.get('expiresAt', null) == null || request.time.toMillis() < before.expiresAt)
+        && after.get('uses', 0) == before.get('uses', 0) + 1
+        && (before.get('maxUses', null) == null || after.get('uses', 0) <= before.maxUses);
+    }
+
     function isValidJoin(serverId) {
       return !(uid() in resource.data.memberIds)
         && !(uid() in resource.data.get('bannedIds', []))
@@ -150,7 +238,7 @@ service cloud.firestore {
         && incoming().memberIds.toSet() == resource.data.memberIds.toSet().union([uid()].toSet())
         && incoming().roles.diff(resource.data.roles).affectedKeys() == [uid()].toSet()
         && incoming().roles[uid()] == 'member'
-        && get(/databases/$(database)/documents/concord_invites/$(incoming().lastJoinCode)).data.serverId == serverId;
+        && isUsableInvite(incoming().lastJoinCode, serverId);
     }
 
     function isValidLeave() {
@@ -193,12 +281,20 @@ service cloud.firestore {
     // Invite codes: readable by id so anyone with the link can preview/join.
     match /concord_invites/{code} {
       allow get: if signedIn();
-      allow list: if signedIn() && resource.data.creatorId == uid();
+      allow list: if signedIn() && (
+        resource.data.creatorId == uid() || isAdminOf(serverDoc(resource.data.serverId))
+      );
       allow create: if signedIn()
         && incoming().creatorId == uid()
         && incoming().code == code
+        && incoming().get('uses', 0) == 0
         && isMemberOf(serverDoc(incoming().serverId));
-      allow update: if false;
+      // The only update is the use counter, bumped by the person joining.
+      allow update: if signedIn()
+        && changedKeys().hasOnly(['uses'])
+        && incoming().uses == resource.data.get('uses', 0) + 1
+        && !(uid() in serverDoc(resource.data.serverId).memberIds)
+        && uid() in getAfter(docPath('concord_servers', resource.data.serverId)).data.memberIds;
       allow delete: if signedIn() && (
         resource.data.creatorId == uid() || isAdminOf(serverDoc(resource.data.serverId))
       );
@@ -209,8 +305,9 @@ service cloud.firestore {
       allow read: if signedIn() && (resource.data.receiverId == uid() || resource.data.senderId == uid());
       allow create: if signedIn()
         && incoming().senderId == uid()
+        && !hasBlocked(incoming().receiverId, uid())
         && isMemberOf(serverDoc(incoming().serverId))
-        && exists(/databases/$(database)/documents/concord_invites/$(incoming().code));
+        && exists(docPath('concord_invites', incoming().code));
       allow update: if signedIn()
         && resource.data.receiverId == uid()
         && changedKeys().hasOnly(['status', 'respondedAt']);
@@ -224,6 +321,35 @@ service cloud.firestore {
         && incoming().actorId == uid()
         && isModOf(serverDoc(incoming().serverId));
       allow update, delete: if false;
+    }
+
+    // Scheduled events with RSVPs.
+    match /concord_events/{eventId} {
+      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow create: if signedIn()
+        && incoming().createdBy == uid()
+        && isMemberOf(serverDoc(incoming().serverId));
+      allow update: if signedIn() && incoming().serverId == resource.data.serverId && (
+        resource.data.createdBy == uid()
+        || isModOf(serverDoc(resource.data.serverId))
+        || (changedKeys().hasOnly(['rsvps'])
+          && isMemberOf(serverDoc(resource.data.serverId))
+          && incoming().rsvps.diff(resource.data.get('rsvps', {})).affectedKeys().hasOnly([uid()]))
+      );
+      allow delete: if signedIn() && (
+        resource.data.createdBy == uid() || isModOf(serverDoc(resource.data.serverId))
+      );
+    }
+
+    // Auto-created voice rooms (from a "create room" lobby channel).
+    match /concord_temp_channels/{channelId} {
+      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow create: if signedIn()
+        && incoming().ownerId == uid()
+        && isMemberOf(serverDoc(incoming().serverId));
+      allow update: if signedIn() && resource.data.ownerId == uid() && changedKeys().hasOnly(['name']);
+      // Any member may clean up an empty room.
+      allow delete: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
     }
 
     // ---------------------------------------------------------------------
@@ -242,8 +368,8 @@ service cloud.firestore {
         // Author edits their own text.
         (resource.data.userId == uid()
           && changedKeys().hasOnly(['content', 'editedAt', 'mentions', 'mentionEveryone']))
-        // Any member who can see the channel may react.
-        || (changedKeys().hasOnly(['reactions'])
+        // Members toggle their own reactions and poll votes.
+        || ((isOwnReactionToggle() || isOwnPollVote())
           && canViewChannel(serverDoc(resource.data.serverId), resource.data.channelId))
         // Moderators pin/unpin.
         || (changedKeys().hasOnly(['pinned', 'pinnedBy', 'pinnedAt'])
@@ -269,18 +395,22 @@ service cloud.firestore {
 
     match /concord_mentions/{mentionId} {
       allow read, delete: if signedIn() && resource.data.targetId == uid();
+      allow update: if signedIn() && resource.data.targetId == uid() && changedKeys().hasOnly(['read']);
       allow create: if signedIn()
         && incoming().authorId == uid()
+        && incoming().get('read', false) == false
+        && !hasBlocked(incoming().targetId, uid())
         && isMemberOf(serverDoc(incoming().serverId))
         && incoming().targetId in serverDoc(incoming().serverId).memberIds;
     }
 
-    // Typing indicators (doc id = "<scopeKey>_<uid>").
+    // Typing indicators (doc id = "<scopeKey>_<uid>"), visible to the scope only.
     match /concord_typing/{typingId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && canAccessScope(resource.data.scopeType, resource.data.scopeId);
       allow create, update: if signedIn()
         && incoming().userId == uid()
-        && typingId == incoming().scopeKey + '_' + uid();
+        && typingId == incoming().scopeKey + '_' + uid()
+        && canAccessScope(incoming().scopeType, incoming().scopeId);
       allow delete: if signedIn() && resource.data.userId == uid();
     }
 
@@ -290,16 +420,34 @@ service cloud.firestore {
 
     function isValidNewThread(threadId) {
       return uid() in incoming().participants
-        && incoming().participants.size() >= 2
-        && incoming().participants.size() <= 10
+        && incoming().participants.size() == 2
         && (
+          // 1-on-1: id derived from both participants, allowed by the other's settings.
           (incoming().isGroup == false
-            && incoming().participants.size() == 2
             && incoming().participants[0] < incoming().participants[1]
-            && threadId == 'dm_' + incoming().participants[0] + '_' + incoming().participants[1])
+            && threadId == 'dm_' + incoming().participants[0] + '_' + incoming().participants[1]
+            && canDirectMessage(incoming()))
+          // Group: starts with the owner and one friend; more are added one at a time.
           || (incoming().isGroup == true
             && incoming().ownerId == uid()
-            && threadId.matches('grp_[A-Za-z0-9_-]+'))
+            && threadId.matches('grp_[A-Za-z0-9_-]+')
+            && areFriends(uid(), otherParticipant(incoming()))
+            && !hasBlocked(otherParticipant(incoming()), uid()))
+        );
+    }
+
+    // The group owner removes people, or adds one friend (`lastAddedId`) at a time.
+    function isValidGroupOwnerEdit() {
+      let added = incoming().participants.toSet().difference(resource.data.participants.toSet());
+      return resource.data.isGroup == true
+        && resource.data.ownerId == uid()
+        && incoming().participants.size() <= 10
+        && incoming().ownerId in incoming().participants
+        && (
+          added.size() == 0
+          || (added == [incoming().lastAddedId].toSet()
+            && areFriends(uid(), incoming().lastAddedId)
+            && !hasBlocked(incoming().lastAddedId, uid()))
         );
     }
 
@@ -308,10 +456,8 @@ service cloud.firestore {
       allow create: if signedIn() && isValidNewThread(threadId);
       allow update: if isParticipant(resource.data) && (
         changedKeys().hasOnly(['lastMessageAt', 'lastMessageBy', 'lastPreview', 'updatedAt'])
-        // The group owner manages members/name and may hand the group over.
-        || (resource.data.isGroup == true && resource.data.ownerId == uid()
-          && incoming().participants.size() <= 10
-          && incoming().ownerId in incoming().participants)
+        || isValidGroupOwnerEdit()
+        // Leaving a group.
         || (resource.data.isGroup == true
           && changedKeys().hasOnly(['participants', 'updatedAt'])
           && incoming().participants.toSet() == resource.data.participants.toSet().difference([uid()].toSet()))
@@ -324,10 +470,10 @@ service cloud.firestore {
       allow create: if signedIn()
         && incoming().senderId == uid()
         && isParticipant(threadDoc(incoming().dmId))
-        && notBlockedIn(threadDoc(incoming().dmId));
+        && canDirectMessage(threadDoc(incoming().dmId));
       allow update: if signedIn() && (
         (resource.data.senderId == uid() && changedKeys().hasOnly(['content', 'editedAt']))
-        || (changedKeys().hasOnly(['reactions']) && isParticipant(threadDoc(resource.data.dmId)))
+        || ((isOwnReactionToggle() || isOwnPollVote()) && isParticipant(threadDoc(resource.data.dmId)))
       );
       allow delete: if signedIn() && resource.data.senderId == uid();
     }
@@ -344,7 +490,8 @@ service cloud.firestore {
         && incoming().participants.size() == 2
         && incoming().participants[0] < incoming().participants[1]
         && pairId == incoming().participants[0] + '_' + incoming().participants[1]
-        && incoming().status == 'pending';
+        && incoming().status == 'pending'
+        && !hasBlocked(otherParticipant(incoming()), uid());
       allow update: if isParticipant(resource.data)
         && resource.data.status == 'pending'
         && incoming().status == 'accepted'
@@ -381,24 +528,36 @@ service cloud.firestore {
     // Voice, screen share and soundboard
     // ---------------------------------------------------------------------
 
-    // One presence doc per user (doc id = uid), pointing at the voice channel.
+    function canJoinCall(data) {
+      return (data.get('serverId', null) != null && isMemberOf(serverDoc(data.serverId)))
+        || (data.get('threadId', null) != null && isParticipant(threadDoc(data.threadId)));
+    }
+
+    // One presence doc per user (doc id = uid): a server voice channel or a DM call.
     match /concord_voice_presence/{userId} {
-      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow read: if signedIn() && canJoinCall(resource.data);
       allow create, update: if signedIn()
         && uid() == userId
         && incoming().userId == uid()
-        && isMemberOf(serverDoc(incoming().serverId));
-      allow delete: if signedIn() && (uid() == userId || isModOf(serverDoc(resource.data.serverId)));
+        && canJoinCall(incoming());
+      allow delete: if signedIn() && (
+        uid() == userId
+        || (resource.data.get('serverId', null) != null && isModOf(serverDoc(resource.data.serverId)))
+      );
     }
 
     match /concord_voice_signals/{signalId} {
-      allow create: if signedIn() && incoming().senderId == uid();
+      allow create: if signedIn()
+        && incoming().senderId == uid()
+        && inSameCall(uid(), incoming().targetId, incoming().channelId);
       allow read: if signedIn() && resource.data.targetId == uid();
       allow delete: if signedIn() && (resource.data.targetId == uid() || resource.data.senderId == uid());
     }
 
     match /concord_screen_signals/{signalId} {
-      allow create: if signedIn() && incoming().fromUserId == uid();
+      allow create: if signedIn()
+        && incoming().fromUserId == uid()
+        && inSameCall(uid(), incoming().toUserId, incoming().channelId);
       allow read: if signedIn() && resource.data.toUserId == uid();
       allow delete: if signedIn() && (resource.data.toUserId == uid() || resource.data.fromUserId == uid());
     }

@@ -4,43 +4,110 @@
       "collectionGroup": "concord_messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "serverId", "order": "ASCENDING" },
-        { "fieldPath": "channelId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "serverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "channelId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "concord_messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "serverId", "order": "ASCENDING" },
-        { "fieldPath": "channelId", "order": "ASCENDING" },
-        { "fieldPath": "pinned", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "serverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "channelId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "pinned",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "concord_messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "serverId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "serverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "concord_direct_messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "dmId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "dmId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "concord_audit",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "serverId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "serverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "concord_mentions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "targetId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "concord_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "serverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startsAt",
+          "order": "ASCENDING"
+        }
       ]
     }
   ],

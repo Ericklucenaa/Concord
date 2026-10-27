@@ -7,6 +7,7 @@ import { useScreenShare } from '../context/ScreenShareContext';
 import { usePresence } from '../context/PresenceContext';
 import { useDM } from '../context/DMContext';
 import { useNotification } from '../context/NotificationContext';
+import { useOverlayUI } from '../context/OverlayUIContext';
 import { roleOf, isAdmin, isModerator, outranks, ROLE_LABELS } from '../services/permissions';
 import { defaultAvatar } from '../services/cloud/util';
 
@@ -25,6 +26,7 @@ export default function MemberListSidebar() {
   const { getProfile, getStatus, getCustomStatus } = usePresence();
   const { openDMWithUser, blockUser, unblockUser, isBlocked } = useDM();
   const [selectedId, setSelectedId] = useState(null);
+  const { openProfile } = useOverlayUI();
 
   useEffect(() => setSelectedId(null), [activeServer?.id]);
 
@@ -57,6 +59,7 @@ export default function MemberListSidebar() {
         role: roleOf(activeServer, id),
         status: getStatus(id),
         custom: getCustomStatus(id),
+        activity: profile?.activity?.name ? profile.activity : null,
         voiceMuted: activeServer.mutedIds.includes(id),
         streamingChannel
       };
@@ -104,14 +107,25 @@ export default function MemberListSidebar() {
     const canActOn = !isMe && outranks(activeServer, me, m.id);
 
     return (
-      <div key={m.id} className={`member-item ${m.status === 'offline' ? 'offline' : ''}`} onClick={() => setSelectedId(open ? null : m.id)}>
+      <div
+        key={m.id}
+        className={`member-item ${m.status === 'offline' ? 'offline' : ''}`}
+        onClick={(e) => openProfile(m.id, e)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setSelectedId(open ? null : m.id);
+        }}
+        title="Clique para ver o perfil · botão direito para ações"
+      >
         <div className="avatar-wrapper">
           <img src={m.avatar || defaultAvatar(m.username)} alt="" className="avatar-img" />
           <div className={`status-dot ${m.status}`} />
         </div>
         <div className="member-info">
           <span className="member-item-name">{m.username}</span>
-          {m.custom && <span className="member-custom-status">{`${m.custom.emoji || ''} ${m.custom.text || ''}`.trim()}</span>}
+          {m.activity && m.status !== 'offline'
+            ? <span className="member-custom-status activity">🎮 Jogando {m.activity.name}</span>
+            : m.custom && <span className="member-custom-status">{`${m.custom.emoji || ''} ${m.custom.text || ''}`.trim()}</span>}
         </div>
 
         {m.streamingChannel && (

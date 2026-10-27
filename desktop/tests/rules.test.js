@@ -19,7 +19,9 @@ import {
   where,
   arrayUnion,
   arrayRemove,
-  deleteField
+  deleteField,
+  writeBatch,
+  increment
 } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-concord-rules';
@@ -49,6 +51,17 @@ const SERVER = {
 };
 
 const db = (uid) => env.authenticatedContext(uid).firestore();
+
+// Joining = server update + invite counter in one batch, like the app does.
+function join(uid, code, role = 'member') {
+  const f = db(uid);
+  const batch = writeBatch(f);
+  batch.update(doc(f, 'concord_servers', 'srv1'), {
+    memberIds: arrayUnion(uid), [`roles.${uid}`]: role, lastJoinCode: code
+  });
+  batch.update(doc(f, 'concord_invites', code), { uses: increment(1) });
+  return batch.commit();
+}
 const anon = () => env.unauthenticatedContext().firestore();
 
 async function seed(fn) {
@@ -134,28 +147,33 @@ describe('servers', () => {
   });
 
   it('joining requires a valid invite for this server', async () => {
-    const join = (code) => updateDoc(doc(db(STRANGER), 'concord_servers', 'srv1'), {
-      memberIds: arrayUnion(STRANGER),
-      [`roles.${STRANGER}`]: 'member',
-      lastJoinCode: code
-    });
-    await assertFails(join('NOPE'));
-    await assertFails(join('OTHERSRV'));
-    await assertSucceeds(join('GOODCODE'));
+    await assertFails(join(STRANGER, 'NOPE'));
+    await assertFails(join(STRANGER, 'OTHERSRV'));
+    await assertFails(updateDoc(doc(db(STRANGER), 'concord_servers', 'srv1'), {
+      memberIds: arrayUnion(STRANGER), [`roles.${STRANGER}`]: 'member', lastJoinCode: 'GOODCODE'
+    }));
+    await assertSucceeds(join(STRANGER, 'GOODCODE'));
   });
 
   it('cannot join as admin or while banned', async () => {
-    await assertFails(updateDoc(doc(db(STRANGER), 'concord_servers', 'srv1'), {
-      memberIds: arrayUnion(STRANGER),
-      [`roles.${STRANGER}`]: 'admin',
-      lastJoinCode: 'GOODCODE'
-    }));
+    await assertFails(join(STRANGER, 'GOODCODE', 'admin'));
     await seed((f) => updateDoc(doc(f, 'concord_servers', 'srv1'), { bannedIds: [STRANGER] }));
-    await assertFails(updateDoc(doc(db(STRANGER), 'concord_servers', 'srv1'), {
-      memberIds: arrayUnion(STRANGER),
-      [`roles.${STRANGER}`]: 'member',
-      lastJoinCode: 'GOODCODE'
-    }));
+    await assertFails(join(STRANGER, 'GOODCODE'));
+  });
+
+  it('expired or used-up invites are rejected', async () => {
+    await seed(async (f) => {
+      await setDoc(doc(f, 'concord_invites', 'OLD'), { code: 'OLD', serverId: 'srv1', creatorId: OWNER, expiresAt: Date.now() - 1000, uses: 0 });
+      await setDoc(doc(f, 'concord_invites', 'ONCE'), { code: 'ONCE', serverId: 'srv1', creatorId: OWNER, maxUses: 1, uses: 1 });
+      await setDoc(doc(f, 'concord_invites', 'TWICE'), { code: 'TWICE', serverId: 'srv1', creatorId: OWNER, maxUses: 2, uses: 1 });
+    });
+    await assertFails(join(STRANGER, 'OLD'));
+    await assertFails(join(STRANGER, 'ONCE'));
+    await assertSucceeds(join(STRANGER, 'TWICE'));
+  });
+
+  it('invite counters cannot be bumped without joining', async () => {
+    await assertFails(updateDoc(doc(db(STRANGER), 'concord_invites', 'GOODCODE'), { uses: increment(1) }));
   });
 
   it('members can leave; the owner must transfer first', async () => {
@@ -229,9 +247,45 @@ describe('channel messages', () => {
   it('only the author edits; members react; moderators pin', async () => {
     await assertSucceeds(updateDoc(doc(db(MEMBER), 'concord_messages', 'm1'), { content: 'editado', editedAt: 'now' }));
     await assertFails(updateDoc(doc(db(ADMIN), 'concord_messages', 'm1'), { content: 'hack' }));
-    await assertSucceeds(updateDoc(doc(db(ADMIN), 'concord_messages', 'm1'), { 'reactions.👍': arrayUnion(ADMIN) }));
+    await assertSucceeds(updateDoc(doc(db(ADMIN), 'concord_messages', 'm1'), { 'reactions.👍': arrayUnion(ADMIN), lastReaction: { emoji: '👍', uid: ADMIN } }));
     await assertFails(updateDoc(doc(db(MEMBER), 'concord_messages', 'm1'), { pinned: true }));
     await assertSucceeds(updateDoc(doc(db(MOD), 'concord_messages', 'm1'), { pinned: true, pinnedBy: MOD }));
+  });
+
+  it('reactions only change the caller own entry', async () => {
+    await seed((f) => updateDoc(doc(f, 'concord_messages', 'm1'), { reactions: { '🔥': [OWNER, ADMIN] } }));
+    const react = (uid, data) => updateDoc(doc(db(uid), 'concord_messages', 'm1'), data);
+    await assertFails(react(MEMBER, { 'reactions.🔥': arrayRemove(OWNER), lastReaction: { emoji: '🔥', uid: MEMBER } }));
+    await assertFails(react(MEMBER, { 'reactions.🔥': arrayUnion(MEMBER), lastReaction: { emoji: '🔥', uid: OWNER } }));
+    await assertFails(react(MEMBER, { 'reactions.🔥': [MEMBER], lastReaction: { emoji: '🔥', uid: MEMBER } }));
+    await assertFails(react(MEMBER, { reactions: {}, lastReaction: { emoji: '🔥', uid: MEMBER } }));
+    await assertSucceeds(react(MEMBER, { 'reactions.🔥': arrayUnion(MEMBER), lastReaction: { emoji: '🔥', uid: MEMBER } }));
+    await assertSucceeds(react(OWNER, { 'reactions.🔥': arrayRemove(OWNER), lastReaction: { emoji: '🔥', uid: OWNER } }));
+  });
+
+  it('poll votes only change the caller own vote', async () => {
+    await seed((f) => setDoc(doc(f, 'concord_messages', 'poll1'), message('poll1', { poll: { question: 'q', options: [{ id: 'a' }, { id: 'b' }] }, pollVotes: { [OWNER]: ['a'] } })));
+    await assertSucceeds(updateDoc(doc(db(MEMBER), 'concord_messages', 'poll1'), { [`pollVotes.${MEMBER}`]: ['b'] }));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_messages', 'poll1'), { [`pollVotes.${OWNER}`]: ['b'] }));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_messages', 'm1'), { [`pollVotes.${MEMBER}`]: ['b'] }));
+  });
+
+  it('typing indicators are only visible inside the scope', async () => {
+    const t = { scopeKey: 'general', scopeType: 'server', scopeId: 'srv1', userId: MEMBER, username: 'm', expiresAt: 1 };
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_typing', `general_${MEMBER}`), t));
+    await assertFails(setDoc(doc(db(STRANGER), 'concord_typing', `general_${STRANGER}`), { ...t, userId: STRANGER }));
+    const q = (uid) => getDocs(query(collection(db(uid), 'concord_typing'), where('scopeKey', '==', 'general'), where('scopeType', '==', 'server'), where('scopeId', '==', 'srv1')));
+    await assertSucceeds(q(OWNER));
+    await assertFails(q(STRANGER));
+  });
+
+  it('mentions from someone the target blocked are rejected', async () => {
+    const m = { targetId: OWNER, authorId: MEMBER, serverId: 'srv1', channelId: 'general', messageId: 'm1', read: false };
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_mentions', 'b1'), m));
+    await seed((f) => setDoc(doc(f, 'concord_blocks', OWNER), { blockedIds: [MEMBER] }));
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_mentions', 'b2'), m));
+    await assertSucceeds(updateDoc(doc(db(OWNER), 'concord_mentions', 'b1'), { read: true }));
+    await assertFails(updateDoc(doc(db(OWNER), 'concord_mentions', 'b1'), { targetId: MEMBER }));
   });
 
   it('author or moderators delete', async () => {
@@ -274,6 +328,28 @@ describe('direct messages', () => {
 
   it('cannot send as someone else', async () => {
     await assertFails(setDoc(doc(db(MEMBER), 'concord_direct_messages', 'd4'), { id: 'd4', dmId: THREAD, senderId: OWNER, content: 'x' }));
+  });
+
+  it('respects "friends only" DM settings', async () => {
+    const send = (id) => setDoc(doc(db(MEMBER), 'concord_direct_messages', id), { id, dmId: THREAD, senderId: MEMBER, content: 'oi' });
+    await seed((f) => setDoc(doc(f, 'concord_users', OWNER), { id: OWNER, username: 'o', dmPolicy: 'friends' }));
+    await assertFails(send('d5'));
+    await seed((f) => setDoc(doc(f, 'concord_friends', pair.join('_')), { participants: pair, requesterId: MEMBER, status: 'accepted' }));
+    await assertSucceeds(send('d6'));
+  });
+
+  it('groups start with a friend and only friends can be added', async () => {
+    const friendPair = [MEMBER, ADMIN].sort();
+    await seed((f) => setDoc(doc(f, 'concord_friends', friendPair.join('_')), { participants: friendPair, requesterId: MEMBER, status: 'accepted' }));
+    const group = { isGroup: true, ownerId: MEMBER, name: 'g', participants: [MEMBER, ADMIN] };
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_a'), { ...group, participants: [MEMBER, STRANGER] }));
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_b'), { ...group, participants: [MEMBER, ADMIN, STRANGER] }));
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_ok'), group));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_ok'), { participants: arrayUnion(STRANGER), lastAddedId: STRANGER }));
+    const ownerPair = [MEMBER, OWNER].sort();
+    await seed((f) => setDoc(doc(f, 'concord_friends', ownerPair.join('_')), { participants: ownerPair, requesterId: MEMBER, status: 'accepted' }));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_ok'), { participants: arrayUnion(OWNER), lastAddedId: ADMIN }));
+    await assertSucceeds(updateDoc(doc(db(MEMBER), 'concord_dm_threads', 'grp_ok'), { participants: arrayUnion(OWNER), lastAddedId: OWNER }));
   });
 });
 
@@ -323,7 +399,16 @@ describe('voice presence and signaling', () => {
     await assertSucceeds(deleteDoc(doc(db(MOD), 'concord_voice_presence', MEMBER)));
   });
 
-  it('signals are readable only by their target', async () => {
+  it('signals are only allowed inside the same call and readable by their target', async () => {
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_voice_signals', 's0'), { senderId: MEMBER, targetId: OWNER, channelId: 'v1' }));
+    await seed(async (f) => {
+      await setDoc(doc(f, 'concord_voice_presence', MEMBER), { userId: MEMBER, serverId: 'srv1', channelId: 'v1' });
+      await setDoc(doc(f, 'concord_voice_presence', OWNER), { userId: OWNER, serverId: 'srv1', channelId: 'v1' });
+      await setDoc(doc(f, 'concord_voice_presence', ADMIN), { userId: ADMIN, serverId: 'srv1', channelId: 'v2' });
+    });
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_voice_signals', 's9'), { senderId: MEMBER, targetId: ADMIN, channelId: 'v1' }));
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_screen_signals', 'x9'), { fromUserId: MEMBER, toUserId: ADMIN, channelId: 'v1' }));
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_screen_signals', 'x1'), { fromUserId: MEMBER, toUserId: OWNER, channelId: 'v1' }));
     await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_voice_signals', 's1'), { senderId: MEMBER, targetId: OWNER, channelId: 'v1' }));
     await assertFails(setDoc(doc(db(MEMBER), 'concord_voice_signals', 's2'), { senderId: OWNER, targetId: MEMBER, channelId: 'v1' }));
     await assertSucceeds(getDoc(doc(db(OWNER), 'concord_voice_signals', 's1')));
@@ -357,5 +442,35 @@ describe('attachments and audit log', () => {
     await assertFails(setDoc(doc(db(MEMBER), 'concord_mentions', 'x2'), m(STRANGER)));
     await assertSucceeds(getDoc(doc(db(OWNER), 'concord_mentions', 'x1')));
     await assertFails(getDoc(doc(db(ADMIN), 'concord_mentions', 'x1')));
+  });
+});
+
+describe('events, DM calls and account data', () => {
+  it('members RSVP for themselves only', async () => {
+    await seed((f) => setDoc(doc(f, 'concord_events', 'e1'), { id: 'e1', serverId: 'srv1', createdBy: OWNER, title: 't', startsAt: 1, rsvps: {} }));
+    await assertSucceeds(updateDoc(doc(db(MEMBER), 'concord_events', 'e1'), { [`rsvps.${MEMBER}`]: 'going' }));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_events', 'e1'), { [`rsvps.${ADMIN}`]: 'going' }));
+    await assertFails(updateDoc(doc(db(MEMBER), 'concord_events', 'e1'), { title: 'hack' }));
+    await assertFails(getDoc(doc(db(STRANGER), 'concord_events', 'e1')));
+  });
+
+  it('DM calls are limited to the conversation participants', async () => {
+    const pair = [MEMBER, OWNER].sort();
+    const thread = `dm_${pair[0]}_${pair[1]}`;
+    await seed((f) => setDoc(doc(f, 'concord_dm_threads', thread), { id: thread, isGroup: false, participants: pair }));
+    const call = (uid) => ({ userId: uid, serverId: null, threadId: thread, channelId: thread });
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_voice_presence', MEMBER), call(MEMBER)));
+    await assertFails(setDoc(doc(db(STRANGER), 'concord_voice_presence', STRANGER), call(STRANGER)));
+    await assertSucceeds(getDocs(query(collection(db(OWNER), 'concord_voice_presence'), where('threadId', '==', thread))));
+    await assertFails(getDocs(query(collection(db(STRANGER), 'concord_voice_presence'), where('threadId', '==', thread))));
+  });
+
+  it('users can delete their own profile and send error reports', async () => {
+    await seed((f) => setDoc(doc(f, 'concord_users', MEMBER), { id: MEMBER, username: 'm' }));
+    await assertFails(deleteDoc(doc(db(OWNER), 'concord_users', MEMBER)));
+    await assertSucceeds(deleteDoc(doc(db(MEMBER), 'concord_users', MEMBER)));
+    await assertSucceeds(setDoc(doc(db(MEMBER), 'concord_error_reports', 'r1'), { userId: MEMBER, message: 'boom' }));
+    await assertFails(setDoc(doc(db(MEMBER), 'concord_error_reports', 'r2'), { userId: OWNER, message: 'boom' }));
+    await assertFails(getDoc(doc(db(MEMBER), 'concord_error_reports', 'r1')));
   });
 });

@@ -7,6 +7,8 @@ import { NotificationProvider, useNotification } from './context/NotificationCon
 import { DMProvider } from './context/DMContext';
 import { PresenceProvider } from './context/PresenceContext';
 import { UnreadProvider } from './context/UnreadContext';
+import { OverlayUIProvider } from './context/OverlayUIContext';
+import { reportError, installGlobalErrorHandlers } from './services/errorReporting';
 
 import TitleBar from './components/TitleBar';
 import ServerSidebar from './components/ServerSidebar';
@@ -17,8 +19,10 @@ import DirectChatArea from './components/DirectChatArea';
 import VoiceRoomArea from './components/VoiceRoomArea';
 import MemberListSidebar from './components/MemberListSidebar';
 import MiniStreamPlayer from './components/MiniStreamPlayer';
+import IncomingCallBanner from './components/IncomingCallBanner';
+import { useEventReminders } from './components/modals/EventsModal';
 import { requestNotificationPermission } from './services/notificationService';
-import { updateSettings } from './services/settings';
+import { updateSettings, getSettings } from './services/settings';
 
 import CreateServerModal from './components/modals/CreateServerModal';
 import CreateChannelModal from './components/modals/CreateChannelModal';
@@ -46,6 +50,7 @@ class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
+    reportError(error, `render:${String(errorInfo?.componentStack || '').trim().split('\n')[0]}`);
   }
 
   render() {
@@ -104,6 +109,62 @@ function useGlobalShortcuts() {
   }, []);
 }
 
+/** Publishes the game detected by the desktop app as "Jogando agora". */
+function useGameActivity() {
+  const { user, updateProfile } = useAuth();
+  const updateRef = useRef(updateProfile);
+  updateRef.current = updateProfile;
+  const userId = user?.id;
+
+  useEffect(() => {
+    if (!userId || !window.electronAPI?.onGameActivity) return undefined;
+    let last = null;
+    const publish = (game) => {
+      const name = getSettings().shareActivity && game?.name ? game.name : null;
+      if (name === last) return;
+      last = name;
+      updateRef.current({ activity: name ? { name, since: Date.now() } : null }).catch(() => {});
+    };
+    const off = window.electronAPI.onGameActivity(publish);
+    const onLogout = () => publish(null);
+    window.addEventListener('concord:before-logout', onLogout);
+    return () => {
+      off();
+      window.removeEventListener('concord:before-logout', onLogout);
+    };
+  }, [userId]);
+}
+
+function VerifyEmailBanner() {
+  const { user, resendVerification } = useAuth();
+  const { showToast, showError } = useNotification();
+  const [hidden, setHidden] = useState(() => sessionStorage.getItem('concord_verify_hidden') === '1');
+  if (!user?.isPasswordAccount || user.emailVerified || hidden) return null;
+  return (
+    <div className="app-banner" role="status">
+      <span>Confirme seu e-mail <strong>{user.email}</strong> para proteger sua conta.</span>
+      <button
+        type="button"
+        className="btn btn-sm btn-secondary"
+        onClick={() => resendVerification().then(() => showToast('E-mail de verificação enviado.', 'success')).catch((err) => showError('Verificação', err.message))}
+      >
+        Reenviar e-mail
+      </button>
+      <button
+        type="button"
+        className="app-banner-close"
+        aria-label="Fechar aviso"
+        onClick={() => {
+          sessionStorage.setItem('concord_verify_hidden', '1');
+          setHidden(true);
+        }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 function MainAppContent() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const { activeServer, activeChannel, joinByCode, serversLoaded, notice, openModal } = useServer();
@@ -112,6 +173,8 @@ function MainAppContent() {
   const { showToast, showSuccess, showError } = useNotification();
   const [showMemberList, setShowMemberList] = useState(true);
   useGlobalShortcuts();
+  useEventReminders();
+  useGameActivity();
 
   useEffect(() => {
     if (isAuthenticated) requestNotificationPermission().catch(() => {});
@@ -168,6 +231,8 @@ function MainAppContent() {
     || (!activeChannel && (activeVoiceChannel || isScreenSharing || activePresenter));
 
   return (
+    <>
+    <VerifyEmailBanner />
     <div className="main-layout">
       <ServerSidebar />
       {activeServer ? <ChannelSidebar /> : <DirectMessagesSidebar />}
@@ -183,6 +248,7 @@ function MainAppContent() {
       {activeServer && showMemberList && !isVoiceView && <MemberListSidebar />}
 
       <MiniStreamPlayer />
+      <IncomingCallBanner />
 
       <ErrorBoundary>
         <CreateServerModal />
@@ -198,8 +264,12 @@ function MainAppContent() {
         <OnboardingModal />
       </ErrorBoundary>
     </div>
+    </>
   );
 }
+
+installGlobalErrorHandlers();
+window.electronAPI?.getAppVersion?.().then((v) => { window.__CONCORD_VERSION__ = v; }).catch(() => {});
 
 export default function App() {
   return (
@@ -211,12 +281,14 @@ export default function App() {
               <UnreadProvider>
                 <VoiceProvider>
                   <ScreenShareProvider>
+                    <OverlayUIProvider>
                     <div className="app-container">
                       <TitleBar />
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, minHeight: 0 }}>
                         <MainAppContent />
                       </div>
                     </div>
+                    </OverlayUIProvider>
                   </ScreenShareProvider>
                 </VoiceProvider>
               </UnreadProvider>

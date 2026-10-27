@@ -4,6 +4,7 @@ import MarkdownText, { firstUrl } from './MarkdownText';
 import LinkPreview from './LinkPreview';
 import AttachmentView from './AttachmentView';
 import EmojiPickerPopover from '../EmojiPickerPopover';
+import { PollCard } from './Polls';
 import { defaultAvatar } from '../../services/cloud/util';
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '🔥', '🎉'];
@@ -98,7 +99,10 @@ function MessageItem({
   onPin,
   onOpenImage,
   onJumpTo,
-  onJoinInvite
+  onJoinInvite,
+  onContextMenu,
+  onOpenProfile,
+  onVote
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [showBlocked, setShowBlocked] = useState(false);
@@ -123,11 +127,17 @@ function MessageItem({
     <div
       id={`msg-${message.id}`}
       className={`message-item ${grouped ? 'grouped' : ''} ${mentionsMe ? 'mentioned' : ''} ${isHighlighted ? 'highlighted' : ''} ${message.pending ? 'pending' : ''}`}
+      onContextMenu={(e) => onContextMenu?.(e, message)}
     >
       {grouped ? (
         <span className="message-hover-time" title={formatFull(message.createdAt)}>{formatTime(message.createdAt)}</span>
       ) : (
-        <img src={message.authorAvatar || defaultAvatar(message.authorName)} alt="" className="message-avatar" />
+        <img
+          src={message.authorAvatar || defaultAvatar(message.authorName)}
+          alt=""
+          className="message-avatar clickable"
+          onClick={(e) => onOpenProfile?.(message.authorId, e)}
+        />
       )}
 
       <div className="message-content-wrapper">
@@ -141,7 +151,7 @@ function MessageItem({
 
         {!grouped && (
           <div className="message-meta">
-            <span className="message-author">{message.authorName}</span>
+            <button className="message-author" onClick={(e) => onOpenProfile?.(message.authorId, e)}>{message.authorName}</button>
             <span className="message-time" title={formatFull(message.createdAt)}>{formatTime(message.createdAt)}</span>
             {message.pinned && <Pin size={11} className="message-pinned-icon" title="Mensagem fixada" />}
           </div>
@@ -158,6 +168,8 @@ function MessageItem({
           </div>
         )}
 
+        {message.pending && <span className="message-pending-label">Enviando…</span>}
+        {message.poll && <PollCard poll={message.poll} votes={message.pollVotes} myId={me.id} onVote={(ids) => onVote?.(message, ids)} />}
         {invite && <InviteCard code={invite[1]} onJoin={onJoinInvite} />}
         {message.imageUrl && (
           <img src={message.imageUrl} alt="" className="chat-image" onClick={() => onOpenImage(message.imageUrl)} />

@@ -6,7 +6,8 @@ import {
   collection,
   query,
   where,
-  onSnapshot
+  onSnapshot,
+  Timestamp
 } from 'firebase/firestore';
 import { firestore } from '../firebase';
 import { logWarn, quietly } from '../log';
@@ -22,17 +23,25 @@ const SOUNDBOARD = 'concord_soundboard';
 export const VOICE_HEARTBEAT_MS = 15_000;
 export const VOICE_STALE_MS = 45_000;
 
+// Temporary documents are removed by a Firestore TTL policy on `expireAt`.
+const expireIn = (ms) => Timestamp.fromMillis(Date.now() + ms);
+
 // ---------------------------------------------------------------------------
 // Presence (one document per user, id = uid)
 // ---------------------------------------------------------------------------
 
-export async function joinVoicePresence(user, serverId, channelId, state) {
+/**
+ * `room` is a server voice channel ({ serverId, channelId }) or a DM call
+ * ({ threadId, channelId: threadId }).
+ */
+export async function joinVoicePresence(user, room, state) {
   await setDoc(doc(firestore, PRESENCE, user.id), {
     userId: user.id,
     username: user.username,
     avatar: user.avatar || '',
-    serverId,
-    channelId,
+    serverId: room.serverId || null,
+    threadId: room.threadId || null,
+    channelId: room.channelId,
     isMuted: Boolean(state.isMuted),
     isDeafened: Boolean(state.isDeafened),
     isScreenSharing: false,
@@ -55,8 +64,8 @@ export async function disconnectFromVoice(targetUserId) {
   await deleteDoc(doc(firestore, PRESENCE, targetUserId));
 }
 
-/** All voice participants of a server, grouped by channel id. */
-export function listenToServerVoice(serverId, callback) {
+/** All voice participants of a server (or of a DM call), grouped by channel id. */
+export function listenToServerVoice(serverId, callback, field = 'serverId') {
   let latest = [];
   const emit = () => {
     const now = Date.now();
@@ -71,7 +80,7 @@ export function listenToServerVoice(serverId, callback) {
     callback(byChannel);
   };
   const unsub = onSnapshot(
-    query(collection(firestore, PRESENCE), where('serverId', '==', serverId)),
+    query(collection(firestore, PRESENCE), where(field, '==', serverId)),
     (snap) => {
       latest = snap.docs.map((d) => d.data());
       emit();
@@ -89,6 +98,10 @@ export function listenToServerVoice(serverId, callback) {
 // WebRTC signaling
 // ---------------------------------------------------------------------------
 
+export function listenToThreadVoice(threadId, callback) {
+  return listenToServerVoice(threadId, callback, 'threadId');
+}
+
 export async function sendVoiceSignal(channelId, senderId, targetId, type, data) {
   const id = newId('vsig');
   await setDoc(doc(firestore, VOICE_SIGNALS, id), {
@@ -98,7 +111,8 @@ export async function sendVoiceSignal(channelId, senderId, targetId, type, data)
     targetId: String(targetId),
     type,
     data: JSON.stringify(data),
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    expireAt: expireIn(5 * 60_000)
   });
 }
 
@@ -138,7 +152,8 @@ export async function sendScreenSignal(channelId, fromUserId, toUserId, type, da
     toUserId: String(toUserId),
     type,
     data: JSON.stringify(data ?? {}),
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    expireAt: expireIn(5 * 60_000)
   });
 }
 
@@ -159,7 +174,8 @@ export async function playSoundboard(serverId, channelId, user, soundId) {
     userId: user.id,
     username: user.username,
     soundId,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    expireAt: expireIn(5 * 60_000)
   });
   // Listeners only react to fresh events, so the sender cleans up afterwards.
   setTimeout(() => quietly('soundboard cleanup', deleteDoc(ref)), 10_000);

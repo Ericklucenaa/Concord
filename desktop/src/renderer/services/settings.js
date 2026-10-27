@@ -16,7 +16,12 @@ export const DEFAULT_SETTINGS = {
   notifyAllMessages: false,
   notificationSounds: true,
   closeToTray: true,
-  launchAtStartup: false
+  launchAtStartup: false,
+  // Global shortcuts: { code, ctrl, shift, alt, label } or null.
+  muteShortcut: null,
+  deafenShortcut: null,
+  overlayEnabled: false,
+  shareActivity: true
 };
 
 let current = load();
@@ -46,7 +51,11 @@ export function updateSettings(patch) {
     closeToTray: current.closeToTray,
     launchAtStartup: current.launchAtStartup,
     voiceMode: current.voiceMode,
-    pttKey: current.pttKey
+    pttKey: current.pttKey,
+    muteShortcut: current.muteShortcut,
+    deafenShortcut: current.deafenShortcut,
+    overlayEnabled: current.overlayEnabled,
+    shareActivity: current.shareActivity
   });
 }
 

@@ -39,6 +39,13 @@ import { sendFriendRequest, respondFriendRequest, listenToFriendships, blockUser
 import { joinVoicePresence, updateVoicePresence, listenToServerVoice, disconnectFromVoice } from '../src/renderer/services/cloud/voice';
 
 const PASSWORD = 'senha-segura-123';
+
+// Messages are written locally first; wait for the server like a test should.
+async function sent(...args) {
+  const { id, committed } = sendMessage(...args);
+  await committed;
+  return id;
+}
 const users = {};
 
 async function as(name) {
@@ -126,9 +133,9 @@ describe('servers, invites and channel messages', () => {
   it('member posts, owner edits nothing but can react and pin', async () => {
     const bob = await as(B());
     const scope = { type: 'channel', serverId: server.id, channelId: server.channels[0].id };
-    const messageId = await sendMessage(scope, bob, { content: `olá @${A()}`, mentions: [users[A()].id] });
+    const messageId = await sent(scope, bob, { content: `olá @${A()}`, mentions: [users[A()].id] });
     await editMessage(scope, messageId, 'olá (editado)');
-    await setTyping(scope.channelId, bob);
+    await setTyping(scope, bob);
 
     const alice = await as(A());
     const messages = await waitFor((cb) => listenToMessages(scope, 50, cb), (m) => m.length === 1);
@@ -158,14 +165,14 @@ describe('servers, invites and channel messages', () => {
     const staff = await addChannel(server.id, { name: 'staff', allowedRoles: ['moderator'] });
 
     const bob = await as(B());
-    await expect(sendMessage({ type: 'channel', serverId: server.id, channelId: news.id }, bob, { content: 'x' })).rejects.toThrow();
-    await expect(sendMessage({ type: 'channel', serverId: server.id, channelId: staff.id }, bob, { content: 'x' })).rejects.toThrow();
+    await expect(sent({ type: 'channel', serverId: server.id, channelId: news.id }, bob, { content: 'x' })).rejects.toThrow();
+    await expect(sent({ type: 'channel', serverId: server.id, channelId: staff.id }, bob, { content: 'x' })).rejects.toThrow();
 
     await as(A());
     await setMemberRole(server.id, bob.id, 'moderator');
     await as(B());
-    await sendMessage({ type: 'channel', serverId: server.id, channelId: news.id }, bob, { content: 'aviso' });
-    await sendMessage({ type: 'channel', serverId: server.id, channelId: staff.id }, bob, { content: 'staff' });
+    await sent({ type: 'channel', serverId: server.id, channelId: news.id }, bob, { content: 'aviso' });
+    await sent({ type: 'channel', serverId: server.id, channelId: staff.id }, bob, { content: 'staff' });
 
     await as(A());
     await updateChannel(server.id, news.id, { readOnly: false });
@@ -176,7 +183,7 @@ describe('servers, invites and channel messages', () => {
     const bob = await as(B());
     await logAudit(server.id, bob, 'test');
     const scope = { type: 'channel', serverId: server.id, channelId: server.channels[0].id };
-    const id = await sendMessage(scope, bob, { content: 'apagar' });
+    const id = await sent(scope, bob, { content: 'apagar' });
     await deleteMessage(scope, id);
   });
 
@@ -188,7 +195,7 @@ describe('servers, invites and channel messages', () => {
   it('voice presence is visible to members and moderators can disconnect', async () => {
     const bob = await as(B());
     const voiceId = server.channels[1].id;
-    await joinVoicePresence(bob, server.id, voiceId, { isMuted: false });
+    await joinVoicePresence(bob, { serverId: server.id, channelId: voiceId }, { isMuted: false });
     await updateVoicePresence(bob.id, { isMuted: true });
 
     const alice = await as(A());
@@ -240,7 +247,7 @@ describe('friends, DMs and blocking', () => {
     const again = await ensureDirectThread(alice, users[B()]);
     expect(again.id).toBe(thread.id);
     const scope = { type: 'dm', threadId: thread.id };
-    await sendMessage(scope, alice, { content: 'oi bob' });
+    await sent(scope, alice, { content: 'oi bob' });
 
     const bob = await as(B());
     const msgs = await waitFor((cb) => listenToMessages(scope, 50, cb), (m) => m.length === 1);
@@ -249,21 +256,28 @@ describe('friends, DMs and blocking', () => {
     await blockUser(bob.id, alice.id);
 
     await as(A());
-    await expect(sendMessage(scope, alice, { content: 'ainda aí?' })).rejects.toThrow();
+    await expect(sent(scope, alice, { content: 'ainda aí?' })).rejects.toThrow();
   });
 
   it('group DMs: create, chat and owner hands over on leave', async () => {
-    const alice = await as(A());
-    const group = await createGroupThread(alice, [users[B()], users[C()]], 'Grupo');
+    let alice = await as(A());
+    await sendFriendRequest(alice, C());
+    const carol0 = await as(C());
+    const reqs = await waitFor((cb) => listenToFriendships(carol0.id, cb), (l) => l.some((f) => f.status === 'pending'));
+    await respondFriendRequest(reqs.find((f) => f.status === 'pending'), 'accept', carol0);
+    alice = await as(A());
+    // Bob blocked Alice in the previous test, so he cannot be added to her group.
+    await expect(createGroupThread(alice, [users[B()]], 'Bloqueado')).rejects.toThrow();
+    const group = await createGroupThread(alice, [users[C()]], 'Grupo');
     const scope = { type: 'dm', threadId: group.id };
-    await sendMessage(scope, alice, { content: 'bem-vindos' });
+    await sent(scope, alice, { content: 'bem-vindos' });
 
     const carol = await as(C());
-    await sendMessage(scope, carol, { content: 'oi!' });
+    await sent(scope, carol, { content: 'oi!' });
 
     await as(A());
     await leaveGroup(group, alice.id);
-    await expect(sendMessage(scope, alice, { content: 'x' })).rejects.toThrow();
+    await expect(sent(scope, alice, { content: 'x' })).rejects.toThrow();
   });
 });
 

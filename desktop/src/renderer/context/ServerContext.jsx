@@ -43,12 +43,17 @@ export function ServerProvider({ children }) {
   const [notice, setNotice] = useState(null);
   // Server to open as soon as the backend confirms it (just created or joined).
   const [pendingSelect, setPendingSelect] = useState(null);
+  const [tempChannels, setTempChannels] = useState([]);
+  const [events, setEvents] = useState([]);
   const knownServerIds = useRef(new Set());
   const voluntaryExits = useRef(new Set());
+
+  const [categoryForNewChannel, setCategoryForNewChannel] = useState(null);
 
   const openModal = useCallback((name, data = null) => {
     setModalState((prev) => ({ ...prev, [name]: true }));
     if (name === 'invite') setSelectedChannelForInvite(data);
+    if (name === 'createChannel') setCategoryForNewChannel(data);
   }, []);
 
   const closeModal = useCallback((name) => {
@@ -111,6 +116,21 @@ export function ServerProvider({ children }) {
     }
   }, [activeServerId, activeServer, serversLoaded]);
 
+  // Auto-created voice rooms and scheduled events of the server on screen.
+  useEffect(() => {
+    if (!activeServerId || !activeServer) {
+      setTempChannels([]);
+      setEvents([]);
+      return undefined;
+    }
+    const unsubs = [
+      servers.listenToTempChannels(activeServerId, setTempChannels),
+      servers.listenToEvents(activeServerId, setEvents)
+    ];
+    return () => unsubs.forEach((u) => u());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeServerId, Boolean(activeServer)]);
+
   const visibleChannels = useMemo(
     () => (activeServer?.channels || []).filter((c) => canViewChannel(activeServer, userId, c.id)),
     [activeServer, userId]
@@ -118,8 +138,10 @@ export function ServerProvider({ children }) {
 
   const activeChannel = useMemo(() => {
     if (!activeServer) return null;
-    return visibleChannels.find((c) => c.id === activeChannelId) || null;
-  }, [activeServer, visibleChannels, activeChannelId]);
+    return visibleChannels.find((c) => c.id === activeChannelId)
+      || tempChannels.find((c) => c.id === activeChannelId)
+      || null;
+  }, [activeServer, visibleChannels, tempChannels, activeChannelId]);
 
   // Pick a sensible channel when entering a server, or when the current one disappears.
   useEffect(() => {
@@ -238,7 +260,7 @@ export function ServerProvider({ children }) {
   // Invites
   // ---------------------------------------------------------------------------
 
-  const createInvite = async (serverId, { username, channelId = null } = {}) => {
+  const createInvite = async (serverId, { username, channelId = null, expiresIn = null, maxUses = null } = {}) => {
     const server = serverList.find((s) => s.id === serverId);
     if (!server) throw new Error('Servidor não encontrado.');
 
@@ -253,7 +275,12 @@ export function ServerProvider({ children }) {
       if (server.memberIds.includes(receiver.id)) throw new Error(`@${receiver.username} já faz parte deste servidor.`);
     }
 
-    const invite = await servers.createInvite(server, user, { channelId });
+    const invite = await servers.createInvite(server, user, {
+      channelId,
+      // Direct invites to one person are single-use and expire in a week.
+      expiresIn: receiver ? servers.INVITE_EXPIRY_OPTIONS['7d'] : expiresIn,
+      maxUses: receiver ? 1 : maxUses
+    });
     if (receiver) await servers.sendInviteToUser(invite, user, receiver);
 
     return {
@@ -287,6 +314,18 @@ export function ServerProvider({ children }) {
     return { message: 'Convite recusado.' };
   };
 
+  const reorderChannels = (serverId, ordered) => servers.reorderChannels(serverId, ordered);
+  const addCategory = async (serverId, name) => {
+    const category = await servers.addCategory(serverId, name);
+    audit(serverId, 'category_create', { targetId: category.id, targetName: category.name });
+    return category;
+  };
+  const renameCategory = (serverId, categoryId, name) => servers.renameCategory(serverId, categoryId, name);
+  const deleteCategory = async (serverId, category) => {
+    await servers.deleteCategory(serverId, category.id);
+    audit(serverId, 'category_delete', { targetId: category.id, targetName: category.name });
+  };
+
   return (
     <ServerContext.Provider
       value={{
@@ -297,6 +336,7 @@ export function ServerProvider({ children }) {
         visibleChannels,
         pendingInvites,
         selectedChannelForInvite,
+        categoryForNewChannel,
         modalState,
         notice,
         openModal,
@@ -319,7 +359,13 @@ export function ServerProvider({ children }) {
         transferOwnership,
         createInvite,
         joinByCode,
-        respondInvite
+        respondInvite,
+        tempChannels,
+        events,
+        reorderChannels,
+        addCategory,
+        renameCategory,
+        deleteCategory
       }}
     >
       {children}

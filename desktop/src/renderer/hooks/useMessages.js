@@ -41,7 +41,10 @@ export function useMessages(scope) {
 }
 
 /** "X está digitando…" for a scope, plus a throttled notifier for my own typing. */
-export function useTyping(key, user) {
+export function useTyping(scope, user) {
+  const key = scope ? scopeKey(scope) : null;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
   const [typingNames, setTypingNames] = useState([]);
   const lastSentRef = useRef(0);
   const stopTimerRef = useRef(null);
@@ -49,14 +52,14 @@ export function useTyping(key, user) {
   useEffect(() => {
     setTypingNames([]);
     if (!key || !user?.id) return undefined;
-    return listenToTyping(key, user.id, setTypingNames);
+    return listenToTyping(scopeRef.current, user.id, setTypingNames);
   }, [key, user?.id]);
 
   const stop = useCallback(() => {
     clearTimeout(stopTimerRef.current);
     if (lastSentRef.current && key && user?.id) {
       lastSentRef.current = 0;
-      quietly('clear typing', clearTyping(key, user.id));
+      quietly('clear typing', clearTyping(scopeRef.current, user.id));
     }
   }, [key, user?.id]);
 
@@ -65,7 +68,7 @@ export function useTyping(key, user) {
     const now = Date.now();
     if (now - lastSentRef.current > 4000) {
       lastSentRef.current = now;
-      quietly('set typing', setTyping(key, user));
+      quietly('set typing', setTyping(scopeRef.current, user));
     }
     clearTimeout(stopTimerRef.current);
     stopTimerRef.current = setTimeout(stop, 5000);

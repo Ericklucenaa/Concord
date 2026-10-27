@@ -91,3 +91,15 @@ export async function setDocument(path, data) {
 export async function deleteDocument(path) {
   return request('DELETE', docUrl(path));
 }
+
+/** Top-level collection ids of the database. */
+export async function listCollectionIds() {
+  const ids = [];
+  let pageToken = '';
+  do {
+    const data = await request('POST', `${BASE}:listCollectionIds`, { pageSize: 100, pageToken: pageToken || undefined });
+    ids.push(...(data.collectionIds || []));
+    pageToken = data.nextPageToken || '';
+  } while (pageToken);
+  return ids;
+}

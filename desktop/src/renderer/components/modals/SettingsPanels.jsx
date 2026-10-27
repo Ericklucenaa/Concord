@@ -159,6 +159,20 @@ export function AppSettingsPanel() {
           description="Abre o Concord minimizado quando você liga o computador."
           disabled={!isElectron}
         />
+        <Toggle
+          checked={settings.overlayEnabled}
+          onChange={(v) => update({ overlayEnabled: v })}
+          title="Overlay nos jogos"
+          description="Mostra quem está na chamada e quem está falando por cima dos jogos (modo janela ou tela cheia sem borda)."
+          disabled={!isElectron}
+        />
+        <Toggle
+          checked={settings.shareActivity}
+          onChange={(v) => update({ shareActivity: v })}
+          title="Mostrar o jogo que estou jogando"
+          description="Seus amigos veem “Jogando …” no seu perfil enquanto um jogo conhecido estiver aberto."
+          disabled={!isElectron}
+        />
         {!isElectron && <div className="hint">Disponível apenas no aplicativo instalado.</div>}
         {version && <div className="hint">Versão instalada: v{version}</div>}
       </div>

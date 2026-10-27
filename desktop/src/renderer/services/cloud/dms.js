@@ -64,26 +64,34 @@ export async function createGroupThread(owner, members, name) {
   if (all.length < 2) throw new Error('Escolha pelo menos um amigo para o grupo.');
   if (all.length > MAX_GROUP_SIZE) throw new Error(`Grupos podem ter no máximo ${MAX_GROUP_SIZE} pessoas.`);
   const id = newId('grp');
+  // The rules accept a new group with the owner and one friend; everyone else
+  // is added one at a time so each addition can be checked (friends only,
+  // not blocked).
+  const [first, ...rest] = all.slice(1);
   const thread = {
     id,
     isGroup: true,
     ownerId: owner.id,
     name: (name || '').trim().slice(0, 60) || all.map((m) => m.username).join(', ').slice(0, 60),
-    participants: all.map((m) => m.id),
-    profiles: Object.fromEntries(all.map((m) => [m.id, profileOf(m)])),
+    participants: [owner.id, first.id],
+    profiles: { [owner.id]: profileOf(owner), [first.id]: profileOf(first) },
     createdAt: nowIso(),
     updatedAt: nowIso()
   };
   await setDoc(doc(firestore, THREADS, id), thread);
-  return thread;
+  await addGroupMembers(thread, rest);
+  return { ...thread, participants: all.map((m) => m.id) };
 }
 
 export async function addGroupMembers(thread, members) {
-  const fields = { participants: arrayUnion(...members.map((m) => m.id)), updatedAt: nowIso() };
-  members.forEach((m) => {
-    fields[`profiles.${m.id}`] = profileOf(m);
-  });
-  await updateDoc(doc(firestore, THREADS, thread.id), fields);
+  for (const m of members) {
+    await updateDoc(doc(firestore, THREADS, thread.id), {
+      participants: arrayUnion(m.id),
+      lastAddedId: m.id,
+      [`profiles.${m.id}`]: profileOf(m),
+      updatedAt: nowIso()
+    });
+  }
 }
 
 export async function removeGroupMember(thread, memberId) {

@@ -1,35 +1,60 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { X, Send, Check, UserPlus, Link as LinkIcon, Trash2, Clock } from 'lucide-react';
 import { useServer } from '../../context/ServerContext';
-import { inviteLinkFor } from '../../services/cloud/servers';
-import { X, Send, Check, UserPlus, Link as LinkIcon } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { inviteLinkFor, listenToServerInvites, revokeInvite, inviteStatus, INVITE_EXPIRY_OPTIONS } from '../../services/cloud/servers';
+import { isAdmin } from '../../services/permissions';
+
+const EXPIRY_LABELS = { '30m': '30 minutos', '1h': '1 hora', '1d': '1 dia', '7d': '7 dias', never: 'Nunca' };
+const USES = [0, 1, 5, 10, 25, 100];
+
+function describe(invite) {
+  const parts = [];
+  parts.push(invite.maxUses ? `${invite.uses || 0}/${invite.maxUses} usos` : `${invite.uses || 0} usos`);
+  if (invite.expiresAt) {
+    const ms = invite.expiresAt - Date.now();
+    parts.push(ms <= 0 ? 'expirado' : ms < 3_600_000 ? `expira em ${Math.ceil(ms / 60000)} min` : ms < 86_400_000 ? `expira em ${Math.ceil(ms / 3_600_000)} h` : `expira em ${Math.ceil(ms / 86_400_000)} d`);
+  } else {
+    parts.push('não expira');
+  }
+  return parts.join(' · ');
+}
 
 export default function InviteModal() {
   const { activeServer, modalState, closeModal, createInvite, selectedChannelForInvite } = useServer();
+  const { user } = useAuth();
   const [username, setUsername] = useState('');
-  const [generatedCode, setGeneratedCode] = useState('');
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [expiry, setExpiry] = useState('7d');
+  const [maxUses, setMaxUses] = useState(0);
+  const [generated, setGenerated] = useState(null);
+  const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [error, setError] = useState('');
+  const [invites, setInvites] = useState([]);
+  const open = Boolean(modalState.invite && activeServer);
 
-  if (!modalState.invite || !activeServer) return null;
+  useEffect(() => {
+    if (!open) return undefined;
+    setGenerated(null);
+    setSuccessMessage('');
+    setError('');
+    return listenToServerInvites(activeServer.id, user.id, isAdmin(activeServer, user.id), setInvites);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeServer?.id]);
+
+  if (!open) return null;
 
   const handleSendInvite = async (e) => {
     e.preventDefault();
     const cleanUser = username.trim().replace(/^@/, '');
     if (!cleanUser) return;
-
     try {
       setIsLoading(true);
       setError('');
       setSuccessMessage('');
-      const data = await createInvite(activeServer.id, {
-        username: cleanUser,
-        channelId: selectedChannelForInvite
-      });
-
-      setSuccessMessage(data.message || `Convite enviado com sucesso para a caixa de entrada de @${cleanUser}!`);
+      const data = await createInvite(activeServer.id, { username: cleanUser, channelId: selectedChannelForInvite });
+      setSuccessMessage(data.message);
       setUsername('');
     } catch (err) {
       setError(err.message || 'Erro ao enviar convite.');
@@ -38,15 +63,16 @@ export default function InviteModal() {
     }
   };
 
-  const handleGenerateCode = async () => {
+  const handleGenerate = async () => {
     try {
       setIsLoading(true);
       setError('');
       const data = await createInvite(activeServer.id, {
-        channelId: selectedChannelForInvite
+        channelId: selectedChannelForInvite,
+        expiresIn: INVITE_EXPIRY_OPTIONS[expiry],
+        maxUses: maxUses || null
       });
-      const code = data?.invite?.code || data?.code || '';
-      setGeneratedCode(code);
+      setGenerated(data.invite);
     } catch (err) {
       setError(err.message || 'Erro ao gerar link de convite.');
     } finally {
@@ -54,154 +80,93 @@ export default function InviteModal() {
     }
   };
 
-  const getInviteLink = () => {
-    if (!generatedCode) return '';
-    return inviteLinkFor(generatedCode);
+  const copyLink = () => {
+    navigator.clipboard.writeText(inviteLinkFor(generated.code));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
-  const copyLinkToClipboard = () => {
-    const link = getInviteLink();
-    if (!link) return;
-    navigator.clipboard.writeText(link);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
-  };
-
-  const copyCodeToClipboard = () => {
-    if (!generatedCode) return;
-    navigator.clipboard.writeText(generatedCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2500);
-  };
+  const channelName = activeServer.channels?.find((c) => c.id === selectedChannelForInvite)?.name;
+  const active = invites.filter((i) => inviteStatus(i) === 'active');
 
   return (
     <div className="modal-backdrop" onClick={() => closeModal('invite')}>
-      <div className="modal-container" style={{ width: 560 }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-container" style={{ width: 580 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <UserPlus size={20} style={{ color: 'var(--accent-primary)' }} />
-            <h3 className="modal-title">Convidar Amigos para {activeServer.name}</h3>
+            <h3 className="modal-title">Convidar para {activeServer.name}</h3>
           </div>
-          <button className="icon-btn" onClick={() => closeModal('invite')}>
-            <X size={18} />
-          </button>
+          <button className="icon-btn" onClick={() => closeModal('invite')} aria-label="Fechar"><X size={18} /></button>
         </div>
 
-        {error && <div className="auth-error" style={{ margin: '16px 20px 0' }}>{error}</div>}
-        {successMessage && (
-          <div style={{ margin: '16px 20px 0', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-            {successMessage}
-          </div>
-        )}
-
         <div className="modal-body">
-          {/* Direct User Nickname Invite */}
+          {error && <div className="auth-error">{error}</div>}
+          {successMessage && <div className="success-banner">{successMessage}</div>}
+
           <form onSubmit={handleSendInvite} className="form-group">
-            <label className="form-label" style={{ fontWeight: 700 }}>Convidar por Apelido Único (@apelido)</label>
+            <label className="form-label">Enviar para um amigo (@apelido)</label>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
                 className="form-input"
-                placeholder="Ex: @erick ou @shiftf13"
+                placeholder="@apelido"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                style={{ flex: 1, fontFamily: 'var(--font-mono)' }}
+                style={{ flex: 1 }}
                 autoFocus
               />
-              <button 
-                type="submit" 
-                className="btn btn-primary"
-                disabled={isLoading || !username.trim()}
-              >
-                <Send size={15} />
-                Enviar Convite
+              <button type="submit" className="btn btn-primary" disabled={isLoading || !username.trim()}>
+                <Send size={15} /> Enviar
               </button>
             </div>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              O convite chegará diretamente na caixa de mensagens (`✉️`) desse usuário para ele aceitar.
-            </span>
+            <span className="hint">Chega na caixa de convites da pessoa. Vale para uma entrada e expira em 7 dias.</span>
           </form>
 
-          <div className="server-divider" style={{ width: '100%', margin: '14px 0' }} />
-
-          {/* Generate Discord-Style Invite Link */}
           <div className="form-group">
-            <label className="form-label" style={{ fontWeight: 700 }}>
-              {selectedChannelForInvite 
-                ? `Link de Convite Exclusivo para o Canal #${activeServer.channels?.find(c => c.id === selectedChannelForInvite)?.name || 'Canal'}`
-                : 'Link de Convite do Servidor (Estilo Discord)'}
-            </label>
-            {generatedCode ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={getInviteLink()}
-                    readOnly
-                    style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, backgroundColor: 'var(--bg-tertiary)' }}
-                  />
-                  <button className="btn btn-primary" onClick={copyLinkToClipboard}>
-                    {copiedLink ? <Check size={16} /> : <LinkIcon size={16} />}
-                    {copiedLink ? 'Link Copiado!' : 'Copiar Link'}
-                  </button>
-                </div>
-
-                <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
-                  <a 
-                    href={getInviteLink()} 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    style={{ 
-                      color: 'var(--accent-primary)', 
-                      fontSize: 12, 
-                      textDecoration: 'underline', 
-                      wordBreak: 'break-all',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Clique aqui para testar o link de convite diretamente
-                  </a>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' }}>
-                  <span>Código rápido: <strong style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{generatedCode}</strong></span>
-                  <button 
-                    type="button" 
-                    onClick={copyCodeToClipboard}
-                    style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', fontSize: 12, textDecoration: 'underline' }}
-                  >
-                    {copiedCode ? 'Código copiado!' : 'Copiar apenas código'}
-                  </button>
-                </div>
-
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', backgroundColor: 'var(--bg-tertiary)', padding: '6px 10px', borderRadius: 'var(--radius-sm)' }}>
-                  ✨ Qualquer pessoa que clicar neste link entrará diretamente no seu servidor. O link não expira.
-                </div>
+            <label className="form-label">{channelName ? `Link para #${channelName}` : 'Link de convite'}</label>
+            {generated ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="form-input" readOnly value={inviteLinkFor(generated.code)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
+                <button className="btn btn-primary" onClick={copyLink}>
+                  {copied ? <Check size={15} /> : <LinkIcon size={15} />} {copied ? 'Copiado!' : 'Copiar'}
+                </button>
               </div>
             ) : (
-              <button 
-                type="button" 
-                className="btn btn-secondary"
-                onClick={handleGenerateCode}
-                disabled={isLoading}
-                style={{ width: '100%', justifyContent: 'center', padding: '10px 0' }}
-              >
-                <LinkIcon size={16} />
-                Gerar Link de Convite do Servidor
-              </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <select className="form-select" value={expiry} onChange={(e) => setExpiry(e.target.value)} aria-label="Validade">
+                  {Object.keys(EXPIRY_LABELS).map((k) => <option key={k} value={k}>Expira: {EXPIRY_LABELS[k]}</option>)}
+                </select>
+                <select className="form-select" value={maxUses} onChange={(e) => setMaxUses(Number(e.target.value))} aria-label="Limite de usos">
+                  {USES.map((n) => <option key={n} value={n}>{n ? `Máx. ${n} ${n === 1 ? 'uso' : 'usos'}` : 'Usos ilimitados'}</option>)}
+                </select>
+                <button className="btn btn-secondary" onClick={handleGenerate} disabled={isLoading}>
+                  <LinkIcon size={15} /> Gerar link
+                </button>
+              </div>
             )}
           </div>
+
+          {active.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">{isAdmin(activeServer, user.id) ? 'Convites ativos do servidor' : 'Seus convites ativos'}</label>
+              <div className="invite-list">
+                {active.map((i) => (
+                  <div key={i.code} className="invite-row">
+                    <code>{i.code}</code>
+                    <span className="invite-row-meta"><Clock size={11} /> {describe(i)} · por @{i.creatorUsername || '—'}</span>
+                    <button className="icon-btn hover-danger" title="Revogar convite" aria-label="Revogar convite" onClick={() => revokeInvite(i.code)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="modal-footer">
-          <button 
-            type="button" 
-            className="btn btn-secondary" 
-            onClick={() => closeModal('invite')}
-          >
-            Fechar
-          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => closeModal('invite')}>Fechar</button>
         </div>
       </div>
     </div>

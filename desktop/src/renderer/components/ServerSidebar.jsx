@@ -9,10 +9,13 @@ import {
   UserPlus, 
   Trash2, 
   LogOut, 
-  FolderPlus 
+  FolderPlus,
+  AtSign,
+  CheckCheck
 } from 'lucide-react';
 import { useNotification } from '../context/NotificationContext';
 import { useUnread } from '../context/UnreadContext';
+import MentionsInbox from './modals/MentionsInbox';
 import { isAdmin } from '../services/permissions';
 
 export default function ServerSidebar() {
@@ -27,7 +30,8 @@ export default function ServerSidebar() {
     leaveServer 
   } = useServer();
   const { user } = useAuth();
-  const { serverSummary, unreadThreadCount } = useUnread();
+  const { serverSummary, unreadThreadCount, unreadMentions, markServerRead } = useUnread();
+  const [inboxOpen, setInboxOpen] = useState(false);
 
   const [contextMenu, setContextMenu] = useState(null); // { server, x, y }
 
@@ -107,6 +111,15 @@ export default function ServerSidebar() {
           {pendingInvites.length > 0 && (
             <span className="badge-counter">{pendingInvites.length}</span>
           )}
+        </button>
+      </div>
+
+      {/* Mentions inbox */}
+      <div className="server-icon-wrapper" title="Menções">
+        <div className="server-pill" />
+        <button className="server-btn" onClick={() => setInboxOpen(true)} aria-label="Menções">
+          <AtSign size={20} />
+          {unreadMentions.length > 0 && <span className="badge-counter">{unreadMentions.length}</span>}
         </button>
       </div>
 
@@ -209,6 +222,14 @@ export default function ServerSidebar() {
             </button>
           )}
 
+          <button
+            className="dropdown-item"
+            onClick={() => { setContextMenu(null); markServerRead(contextMenu.server); }}
+          >
+            <CheckCheck size={15} />
+            Marcar como lido
+          </button>
+
           <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
 
           {isOwner(contextMenu.server) ? (
@@ -232,6 +253,7 @@ export default function ServerSidebar() {
           )}
         </div>
       )}
+      {inboxOpen && <MentionsInbox onClose={() => setInboxOpen(false)} />}
     </aside>
   );
 }

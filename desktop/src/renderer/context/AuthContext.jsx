@@ -4,7 +4,9 @@ import {
   updateProfile as updateAuthProfile,
   EmailAuthProvider,
   reauthenticateWithCredential,
-  updatePassword
+  updatePassword,
+  sendEmailVerification,
+  deleteUser
 } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 import {
@@ -138,14 +140,19 @@ export function AuthProvider({ children }) {
         customStatus: profile?.customStatus || null,
         userTag: profile?.userTag || firebaseUser.uid.substring(0, 4).toUpperCase(),
         onboardingDone: Boolean(profile?.onboardingDone),
-        createdAt: profile?.createdAt
+        createdAt: profile?.createdAt,
+        bio: profile?.bio || '',
+        bannerColor: profile?.bannerColor || '',
+        dmPolicy: profile?.dmPolicy || 'everyone',
+        emailVerified: firebaseUser.emailVerified || (firebaseUser.email || '').endsWith('@concord.app'),
+        isPasswordAccount: firebaseUser.providerData.some((p) => p.providerId === 'password')
       }
     : null),
   // Not `profile` itself: heartbeats rewrite `lastSeen` every minute and must
   // not rebuild the user object (and every effect depending on it).
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [firebaseUser, profile?.username, profile?.avatar, profile?.status, JSON.stringify(profile?.customStatus || null),
-    profile?.userTag, profile?.onboardingDone, profile?.createdAt]);
+    profile?.userTag, profile?.onboardingDone, profile?.createdAt, profile?.bio, profile?.bannerColor, profile?.dmPolicy]);
 
   const login = async ({ login: identifier, password }) => {
     const value = String(identifier || '').trim();
@@ -183,6 +190,9 @@ export function AuthProvider({ children }) {
       lastSeen: Date.now()
     });
     await claimNickname(fbUser.uid, nick, { avatar, email: loginEmail });
+    if (!loginEmail.endsWith('@concord.app')) {
+      sendEmailVerification(fbUser).catch((err) => logWarn('email verification', err));
+    }
     setProfile(await getUserProfile(fbUser.uid));
   };
 
@@ -217,6 +227,10 @@ export function AuthProvider({ children }) {
     if (changes.status !== undefined) fields.status = changes.status;
     if (changes.customStatus !== undefined) fields.customStatus = changes.customStatus;
     if (changes.onboardingDone !== undefined) fields.onboardingDone = changes.onboardingDone;
+    if (changes.bio !== undefined) fields.bio = String(changes.bio).slice(0, 190);
+    if (changes.bannerColor !== undefined) fields.bannerColor = changes.bannerColor;
+    if (changes.dmPolicy !== undefined) fields.dmPolicy = changes.dmPolicy === 'friends' ? 'friends' : 'everyone';
+    if (changes.activity !== undefined) fields.activity = changes.activity;
 
     if (Object.keys(fields).length > 0) {
       await saveUserProfile(firebaseUser.uid, fields);
@@ -239,6 +253,34 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const resendVerification = async () => {
+    if (!firebaseUser) return;
+    await sendEmailVerification(firebaseUser);
+  };
+
+  /**
+   * Deletes every piece of account data (see services/cloud/account) and then
+   * the login itself. Password accounts must confirm their password.
+   */
+  const deleteAccount = async (password, removeData) => {
+    if (!firebaseUser) return;
+    if (firebaseUser.providerData.some((p) => p.providerId === 'password')) {
+      try {
+        await reauthenticateWithCredential(firebaseUser, EmailAuthProvider.credential(firebaseUser.email, password));
+      } catch (err) {
+        throw new Error(err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password' ? 'Senha incorreta.' : friendlyAuthError(err));
+      }
+    }
+    window.dispatchEvent(new Event('concord:before-logout'));
+    await removeData();
+    try {
+      await deleteUser(firebaseUser);
+    } catch (err) {
+      if (err?.code === 'auth/requires-recent-login') throw new Error('Por segurança, saia e entre de novo antes de excluir a conta.');
+      throw new Error(friendlyAuthError(err));
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -250,7 +292,9 @@ export function AuthProvider({ children }) {
         loginGoogle,
         logout,
         updateProfile,
-        changePassword
+        changePassword,
+        resendVerification,
+        deleteAccount
       }}
     >
       {children}

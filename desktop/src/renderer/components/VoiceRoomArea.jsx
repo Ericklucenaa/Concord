@@ -17,13 +17,18 @@ import {
   Signal,
   UserX,
   Eye,
-  EyeOff
+  EyeOff,
+  Activity,
+  Shuffle,
+  Gauge
 } from 'lucide-react';
 import { useVoice } from '../context/VoiceContext';
 import { useScreenShare } from '../context/ScreenShareContext';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import SoundboardModal from './SoundboardModal';
+import TeamDrawModal from './modals/TeamDrawModal';
+import { VIEWER_QUALITIES } from '../context/ScreenShareContext';
 import { isModerator } from '../services/permissions';
 import { defaultAvatar } from '../services/cloud/util';
 import { logWarn } from '../services/log';
@@ -45,7 +50,7 @@ function CameraVideo({ stream }) {
 }
 
 function ParticipantTile({ participant, isMe, compact, canModerate, onKick, onWatch, cameraStream }) {
-  const showCamera = isMe && cameraStream;
+  const showCamera = Boolean(cameraStream) && participant.isCameraOn !== false;
   return (
     <div className={`voice-tile ${participant.isSpeaking ? 'speaking' : ''} ${compact ? 'compact' : ''}`}>
       <div className="voice-tile-backdrop" style={{ backgroundImage: `url("${participant.avatar || defaultAvatar(participant.username)}")` }} />
@@ -83,7 +88,7 @@ function ParticipantTile({ participant, isMe, compact, canModerate, onKick, onWa
   );
 }
 
-export default function VoiceRoomArea() {
+export default function VoiceRoomArea({ embedded = false }) {
   const { showConfirm } = useNotification();
   const { user } = useAuth();
   const {
@@ -100,7 +105,9 @@ export default function VoiceRoomArea() {
     leaveVoice,
     kickUserFromVoice,
     connectionQuality,
-    averagePing
+    averagePing,
+    connectionStats,
+    remoteVideos
   } = useVoice();
   const {
     isScreenSharing,
@@ -112,13 +119,21 @@ export default function VoiceRoomArea() {
     stopScreenShare,
     setIsPickerOpen,
     stopWatching,
-    watchStream
+    watchStream,
+    viewerQuality,
+    requestQuality,
+    statsVisible,
+    setStatsVisible,
+    streamStats
   } = useScreenShare();
 
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [teamDrawOpen, setTeamDrawOpen] = useState(false);
+  const isDmCall = Boolean(activeVoiceChannel?.threadId);
 
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
   const streamReady = isScreenSharing
@@ -173,13 +188,17 @@ export default function VoiceRoomArea() {
       canModerate={canModerate}
       onKick={kick}
       onWatch={(p) => watchStream(p, activeVoiceChannel)}
-      cameraStream={u.userId === user?.id && isCameraOn ? localCameraStream : null}
+      cameraStream={u.userId === user?.id ? (isCameraOn ? localCameraStream : null) : (u.isCameraOn ? remoteVideos.get(u.userId) : null)}
     />
   ));
 
+  const statsRows = voiceUsers
+    .filter((u) => u.userId !== user?.id)
+    .map((u) => ({ ...u, stats: connectionStats.get(u.userId) }));
+
   return (
-    <div className="voice-stream-view" ref={containerRef}>
-      <header className="chat-header voice-header">
+    <div className={`voice-stream-view ${embedded ? 'embedded' : ''}`} ref={containerRef}>
+      {!embedded && <header className="chat-header voice-header">
         <div className="chat-header-info">
           <Volume2 size={20} className="muted-icon" />
           <span className="chat-header-title">{activeVoiceChannel?.name}</span>
@@ -187,12 +206,39 @@ export default function VoiceRoomArea() {
             {voiceUsers.length} {voiceUsers.length === 1 ? 'pessoa' : 'pessoas'} na sala
           </span>
         </div>
-        <div className={`quality-chip ${connectionQuality}`} title={averagePing !== null ? `Latência média: ${averagePing} ms` : undefined}>
+        <button
+          className={`quality-chip ${connectionQuality}`}
+          onClick={() => setDiagnosticsOpen((v) => !v)}
+          title="Diagnóstico da conexão"
+        >
           <Signal size={13} />
           {QUALITY_LABEL[connectionQuality]}
           {averagePing !== null && <span className="quality-ping">{averagePing} ms</span>}
+        </button>
+      </header>}
+
+      {diagnosticsOpen && (
+        <div className="diagnostics-panel">
+          <div className="diagnostics-title"><Activity size={14} /> Diagnóstico da chamada</div>
+          {statsRows.length === 0 && <div className="side-empty">Ninguém mais na chamada.</div>}
+          {statsRows.length > 0 && (
+            <table>
+              <thead><tr><th>Pessoa</th><th>Ping</th><th>Jitter</th><th>Perda</th></tr></thead>
+              <tbody>
+                {statsRows.map((r) => (
+                  <tr key={r.userId}>
+                    <td>{r.username}</td>
+                    <td>{r.stats?.rtt ?? '—'} {r.stats?.rtt != null && 'ms'}</td>
+                    <td>{r.stats?.jitter ?? '—'} {r.stats?.jitter != null && 'ms'}</td>
+                    <td className={r.stats?.loss > 5 ? 'bad' : ''}>{r.stats ? `${r.stats.loss}%` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <div className="hint">Ping alto ou perda acima de 5% indicam rede instável. Um servidor TURN ajuda em redes restritivas.</div>
         </div>
-      </header>
+      )}
 
       {hasActiveStream ? (
         <div className="voice-stage with-stream">
@@ -210,7 +256,29 @@ export default function VoiceRoomArea() {
               <span className="live-badge">AO VIVO</span>
               {isScreenSharing ? 'Você está transmitindo' : `${activePresenter?.username} está transmitindo`}
             </div>
+            {statsVisible && streamStats && (
+              <div className="stream-stats">
+                {streamStats.width > 0 && <span>{streamStats.width}×{streamStats.height}</span>}
+                <span>{streamStats.fps ?? 0} FPS</span>
+                <span>{((streamStats.kbps || 0) / 1000).toFixed(1)} Mbps</span>
+                {streamStats.dropped != null && <span>{streamStats.dropped} quadros perdidos</span>}
+                {streamStats.viewers !== undefined && <span>{streamStats.viewers} assistindo</span>}
+              </div>
+            )}
             <div className="stream-tools">
+              {isViewer && (
+                <select
+                  className="stream-quality-select"
+                  value={viewerQuality}
+                  onChange={(e) => requestQuality(e.target.value)}
+                  title="Qualidade que você recebe"
+                >
+                  {Object.entries(VIEWER_QUALITIES).map(([id, q]) => <option key={id} value={id}>{q.label}</option>)}
+                </select>
+              )}
+              <button className={`icon-btn ${statsVisible ? 'active' : ''}`} onClick={() => setStatsVisible(!statsVisible)} title="Estatísticas da transmissão">
+                <Gauge size={17} />
+              </button>
               {streamReady && document.pictureInPictureEnabled && (
                 <button className="icon-btn" onClick={togglePictureInPicture} title="Janela flutuante">
                   <PictureInPicture2 size={17} />
@@ -251,9 +319,16 @@ export default function VoiceRoomArea() {
         >
           <Tv size={20} />
         </button>
-        <button className="dock-btn" onClick={() => setIsSoundboardOpen(true)} title="Soundboard">
-          <Sparkles size={20} />
-        </button>
+        {!isDmCall && (
+          <button className="dock-btn" onClick={() => setIsSoundboardOpen(true)} title="Soundboard">
+            <Sparkles size={20} />
+          </button>
+        )}
+        {voiceUsers.length > 1 && (
+          <button className="dock-btn" onClick={() => setTeamDrawOpen(true)} title="Sortear times">
+            <Shuffle size={20} />
+          </button>
+        )}
         <span className="dock-divider" />
         <button className="dock-btn leave" onClick={leaveVoice} title="Sair da chamada">
           <PhoneOff size={20} />
@@ -261,6 +336,7 @@ export default function VoiceRoomArea() {
       </div>
 
       <SoundboardModal isOpen={isSoundboardOpen} onClose={() => setIsSoundboardOpen(false)} />
+      {teamDrawOpen && <TeamDrawModal people={voiceUsers} onClose={() => setTeamDrawOpen(false)} />}
     </div>
   );
 }

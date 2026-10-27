@@ -9,6 +9,14 @@ import { logWarn, quietly } from '../services/log';
 
 const ScreenShareContext = createContext(null);
 
+// What each viewer can ask the presenter to send them (per-viewer encoding).
+export const VIEWER_QUALITIES = {
+  source: { label: 'Original', maxBitrate: null, scale: 1 },
+  high: { label: 'Alta (≈1080p)', maxBitrate: 6_000_000, scale: 1 },
+  medium: { label: 'Média (≈720p)', maxBitrate: 2_500_000, scale: 1.5 },
+  low: { label: 'Economia (≈480p)', maxBitrate: 900_000, scale: 2.25 }
+};
+
 const DIMENSIONS = {
   '720p': { width: 1280, height: 720 },
   '1080p': { width: 1920, height: 1080 }
@@ -35,6 +43,10 @@ export function ScreenShareProvider({ children }) {
   const [includeAudio, setIncludeAudio] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [watching, setWatching] = useState(null); // { userId, username }
+  const [viewerQuality, setViewerQuality] = useState('source');
+  const [statsVisible, setStatsVisible] = useState(false);
+  const [streamStats, setStreamStats] = useState(null);
+  const lastStatsRef = useRef(null);
 
   const localStreamRef = useRef(null);
   const toViewersRef = useRef(new Map()); // viewerId -> pc (I present)
@@ -183,7 +195,28 @@ export function ScreenShareProvider({ children }) {
     }
   };
 
+  const applyViewerQuality = (viewerId, level) => {
+    const pc = toViewersRef.current.get(viewerId);
+    const preset = VIEWER_QUALITIES[level] || VIEWER_QUALITIES.source;
+    const sender = pc?.getSenders().find((x) => x.track?.kind === 'video');
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings?.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = preset.maxBitrate || (screenFps >= 60 ? 8_000_000 : 5_000_000);
+      params.encodings[0].scaleResolutionDownBy = preset.scale;
+      sender.setParameters(params).catch((err) => logWarn('viewer quality', err));
+    } catch (err) {
+      logWarn('viewer quality params', err);
+    }
+  };
+
   // --- Viewer side -----------------------------------------------------------
+
+  const requestQuality = (level) => {
+    setViewerQuality(level);
+    if (watching?.userId) signal(watching.userId, 'quality_request', { level });
+  };
 
   const clearRemote = useCallback((presenterId) => {
     fromPresenterRef.current.get(presenterId)?.close();
@@ -226,6 +259,8 @@ export function ScreenShareProvider({ children }) {
     try {
       if (type === 'viewer_ready') {
         if (localStreamRef.current) await offerToViewer(fromUserId);
+      } else if (type === 'quality_request') {
+        applyViewerQuality(fromUserId, data?.level);
       } else if (type === 'answer') {
         const pc = toViewersRef.current.get(fromUserId);
         if (pc?.signalingState === 'have-local-offer') {
@@ -271,6 +306,45 @@ export function ScreenShareProvider({ children }) {
     if (!userId || !activeVoiceChannel?.id) return undefined;
     return listenToScreenSignals(userId, (sig) => handleSignalRef.current(sig));
   }, [userId, activeVoiceChannel?.id]);
+
+  // Live stream statistics (FPS, resolution, bitrate, dropped frames).
+  useEffect(() => {
+    if (!statsVisible) {
+      setStreamStats(null);
+      lastStatsRef.current = null;
+      return undefined;
+    }
+    const timer = setInterval(async () => {
+      const pc = isScreenSharing ? Array.from(toViewersRef.current.values())[0] : fromPresenterRef.current.get(watching?.userId);
+      if (!pc) {
+        setStreamStats(isScreenSharing ? { viewers: 0 } : null);
+        return;
+      }
+      try {
+        const report = await pc.getStats();
+        let rtp = null;
+        report.forEach((r) => {
+          if (r.kind === 'video' && (r.type === (isScreenSharing ? 'outbound-rtp' : 'inbound-rtp'))) rtp = r;
+        });
+        if (!rtp) return;
+        const bytes = isScreenSharing ? rtp.bytesSent : rtp.bytesReceived;
+        const prev = lastStatsRef.current;
+        const kbps = prev ? Math.round(((bytes - prev.bytes) * 8) / ((rtp.timestamp - prev.ts) || 1)) : 0;
+        lastStatsRef.current = { bytes, ts: rtp.timestamp };
+        setStreamStats({
+          fps: Math.round(rtp.framesPerSecond || 0),
+          width: rtp.frameWidth || 0,
+          height: rtp.frameHeight || 0,
+          kbps,
+          dropped: rtp.framesDropped ?? null,
+          viewers: isScreenSharing ? toViewersRef.current.size : undefined
+        });
+      } catch (err) {
+        logWarn('stream stats', err);
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [statsVisible, isScreenSharing, watching?.userId]);
 
   // Presenter stopped or left the room: drop the stream I was watching.
   useEffect(() => {
@@ -332,7 +406,12 @@ export function ScreenShareProvider({ children }) {
         stopScreenShare,
         watchStream,
         stopWatching,
-        setActivePresenter
+        setActivePresenter,
+        viewerQuality,
+        requestQuality,
+        statsVisible,
+        setStatsVisible,
+        streamStats
       }}
     >
       {children}

@@ -13,7 +13,9 @@ import {
   runTransaction,
   arrayUnion,
   arrayRemove,
-  deleteField
+  deleteField,
+  writeBatch,
+  increment
 } from 'firebase/firestore';
 import { firestore } from '../firebase';
 import { logWarn } from '../log';
@@ -24,6 +26,8 @@ const SERVERS = 'concord_servers';
 const INVITES = 'concord_invites';
 const USER_INVITES = 'concord_user_invites';
 const AUDIT = 'concord_audit';
+const EVENTS = 'concord_events';
+const TEMP_CHANNELS = 'concord_temp_channels';
 
 export const DEFAULT_SERVER_ICON = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='26' fill='url(%23g)'/><circle cx='50' cy='50' r='12' fill='%23ffffff'/><path d='M 30 50 A 20 20 0 0 1 70 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/><path d='M 20 50 A 30 30 0 0 1 80 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' opacity='0.6'/></svg>";
 
@@ -38,6 +42,7 @@ export function normalizeServer(raw, userId) {
     bannedIds: raw.bannedIds || [],
     channelRoles: raw.channelRoles || {},
     readOnlyChannels: raw.readOnlyChannels || {},
+    categories: Array.isArray(raw.categories) ? raw.categories : [],
     role: roleOf(raw, userId)
   };
 }
@@ -122,6 +127,7 @@ async function mutateChannels(serverId, mutate) {
     const data = snap.data();
     const next = mutate({
       channels: [...(data.channels || [])],
+      categories: [...(data.categories || [])],
       channelRoles: { ...(data.channelRoles || {}) },
       readOnlyChannels: { ...(data.readOnlyChannels || {}) }
     });
@@ -141,10 +147,12 @@ function applyChannelPermissions(state, channelId, { readOnly, allowedRoles }) {
   }
 }
 
-export async function addChannel(serverId, { name, type = 'text', readOnly = false, allowedRoles = null }) {
+export async function addChannel(serverId, { name, type = 'text', readOnly = false, allowedRoles = null, categoryId = null, isLobby = false }) {
   const cleanName = type === 'text' ? textChannelName(name) : String(name).trim().slice(0, 50);
   if (!cleanName) throw new Error('Informe um nome válido para o canal.');
   const channel = makeChannel(cleanName, type);
+  if (categoryId) channel.categoryId = categoryId;
+  if (isLobby && type === 'voice') channel.isLobby = true;
   await mutateChannels(serverId, (state) => {
     state.channels.push(channel);
     applyChannelPermissions(state, channel.id, { readOnly, allowedRoles });
@@ -169,6 +177,53 @@ export async function deleteChannel(serverId, channelId) {
     state.channels = state.channels.filter((c) => c.id !== channelId);
     delete state.channelRoles[channelId];
     delete state.readOnlyChannels[channelId];
+    return state;
+  });
+}
+
+/** Saves a new channel order/category assignment (drag and drop). */
+export async function reorderChannels(serverId, orderedChannels) {
+  await mutateChannels(serverId, (state) => {
+    const byId = new Map(state.channels.map((c) => [c.id, c]));
+    state.channels = orderedChannels
+      .filter((c) => byId.has(c.id))
+      .map((c) => {
+        const next = { ...byId.get(c.id) };
+        if (c.categoryId) next.categoryId = c.categoryId;
+        else delete next.categoryId;
+        return next;
+      });
+    return state;
+  });
+}
+
+export async function addCategory(serverId, name) {
+  const category = { id: newId('cat'), name: String(name).trim().slice(0, 40) };
+  if (!category.name) throw new Error('Informe um nome para a categoria.');
+  await mutateChannels(serverId, (state) => {
+    state.categories.push(category);
+    return state;
+  });
+  return category;
+}
+
+export async function renameCategory(serverId, categoryId, name) {
+  await mutateChannels(serverId, (state) => {
+    state.categories = state.categories.map((c) => (c.id === categoryId ? { ...c, name: String(name).trim().slice(0, 40) } : c));
+    return state;
+  });
+}
+
+/** Deletes a category; its channels move to the top level. */
+export async function deleteCategory(serverId, categoryId) {
+  await mutateChannels(serverId, (state) => {
+    state.categories = state.categories.filter((c) => c.id !== categoryId);
+    state.channels = state.channels.map((c) => {
+      if (c.categoryId !== categoryId) return c;
+      const next = { ...c };
+      delete next.categoryId;
+      return next;
+    });
     return state;
   });
 }
@@ -262,9 +317,20 @@ export function inviteLinkFor(code) {
   return `${origin}/#invite=${code}`;
 }
 
-export async function createInvite(server, user, { channelId = null } = {}) {
+export const INVITE_EXPIRY_OPTIONS = {
+  '30m': 30 * 60_000,
+  '1h': 60 * 60_000,
+  '1d': 24 * 60 * 60_000,
+  '7d': 7 * 24 * 60 * 60_000,
+  never: null
+};
+
+export async function createInvite(server, user, { channelId = null, expiresIn = null, maxUses = null } = {}) {
   const code = randomInviteCode();
   const invite = {
+    uses: 0,
+    expiresAt: expiresIn ? Date.now() + expiresIn : null,
+    maxUses: maxUses || null,
     code,
     serverId: server.id,
     serverName: server.name,
@@ -279,6 +345,28 @@ export async function createInvite(server, user, { channelId = null } = {}) {
   return { ...invite, inviteLink: inviteLinkFor(code) };
 }
 
+export function inviteStatus(invite) {
+  if (invite.expiresAt && Date.now() >= invite.expiresAt) return 'expired';
+  if (invite.maxUses && (invite.uses || 0) >= invite.maxUses) return 'used_up';
+  return 'active';
+}
+
+/** Invites I created for a server (admins see all of them). */
+export function listenToServerInvites(serverId, userId, asAdmin, callback) {
+  const q = asAdmin
+    ? query(collection(firestore, INVITES), where('serverId', '==', serverId))
+    : query(collection(firestore, INVITES), where('serverId', '==', serverId), where('creatorId', '==', userId));
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => d.data()).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))),
+    (err) => logWarn('listen invites', err)
+  );
+}
+
+export async function revokeInvite(code) {
+  await deleteDoc(doc(firestore, INVITES, code));
+}
+
 export async function getInvite(code) {
   const clean = String(code || '').trim().toUpperCase();
   if (!clean) return null;
@@ -290,6 +378,7 @@ export async function getInvite(code) {
 export async function joinServerWithCode(code, userId) {
   const invite = await getInvite(code);
   if (!invite) throw new Error('Código de convite inválido ou expirado.');
+  const status = inviteStatus(invite);
 
   const ref = doc(firestore, SERVERS, invite.serverId);
 
@@ -301,13 +390,20 @@ export async function joinServerWithCode(code, userId) {
     if (err?.code !== 'permission-denied') throw err;
   }
 
+  if (status === 'expired') throw new Error('Este convite expirou. Peça um novo link.');
+  if (status === 'used_up') throw new Error('Este convite já atingiu o limite de usos.');
+
+  // Joining and counting the invite use happen atomically; the rules check both.
   try {
-    await updateDoc(ref, {
+    const batch = writeBatch(firestore);
+    batch.update(ref, {
       memberIds: arrayUnion(userId),
       [`roles.${userId}`]: 'member',
       lastJoinCode: invite.code,
       updatedAt: nowIso()
     });
+    batch.update(doc(firestore, INVITES, invite.code), { uses: increment(1) });
+    await batch.commit();
   } catch (err) {
     if (err?.code === 'permission-denied') {
       throw new Error('Não foi possível entrar neste servidor. Você pode ter sido banido ou o convite não é mais válido.');
@@ -390,4 +486,76 @@ export function listenToAudit(serverId, callback) {
     (snap) => callback(snap.docs.map((d) => d.data())),
     (err) => logWarn('listen audit', err)
   );
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+export function listenToEvents(serverId, callback) {
+  const q = query(collection(firestore, EVENTS), where('serverId', '==', serverId), orderBy('startsAt', 'asc'), limit(50));
+  return onSnapshot(
+    q,
+    (snap) => callback(snap.docs.map((d) => d.data())),
+    (err) => logWarn('listen events', err)
+  );
+}
+
+export async function createEvent(serverId, user, { title, description = '', startsAt, channelId = null }) {
+  const id = newId('evt');
+  const event = {
+    id,
+    serverId,
+    title: title.trim().slice(0, 100),
+    description: description.trim().slice(0, 1000),
+    startsAt,
+    channelId,
+    createdBy: user.id,
+    createdByName: user.username,
+    rsvps: { [user.id]: 'going' },
+    createdAt: nowIso()
+  };
+  await setDoc(doc(firestore, EVENTS, id), event);
+  return event;
+}
+
+export async function setRsvp(eventId, userId, status) {
+  await updateDoc(doc(firestore, EVENTS, eventId), { [`rsvps.${userId}`]: status || deleteField() });
+}
+
+export async function deleteEvent(eventId) {
+  await deleteDoc(doc(firestore, EVENTS, eventId));
+}
+
+// ---------------------------------------------------------------------------
+// Temporary voice rooms (created from a lobby channel)
+// ---------------------------------------------------------------------------
+
+export function listenToTempChannels(serverId, callback) {
+  return onSnapshot(
+    query(collection(firestore, TEMP_CHANNELS), where('serverId', '==', serverId)),
+    (snap) => callback(snap.docs.map((d) => d.data())),
+    (err) => logWarn('listen temp channels', err)
+  );
+}
+
+export async function createTempChannel(serverId, lobby, user) {
+  const id = newId('tmp');
+  const channel = {
+    id,
+    serverId,
+    lobbyId: lobby.id,
+    categoryId: lobby.categoryId || null,
+    name: `Sala de ${user.username}`.slice(0, 50),
+    type: 'voice',
+    temporary: true,
+    ownerId: user.id,
+    createdAt: Date.now()
+  };
+  await setDoc(doc(firestore, TEMP_CHANNELS, id), channel);
+  return channel;
+}
+
+export async function deleteTempChannel(channelId) {
+  await deleteDoc(doc(firestore, TEMP_CHANNELS, channelId));
 }

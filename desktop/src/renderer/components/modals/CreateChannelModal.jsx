@@ -5,11 +5,12 @@ import { CHANNEL_TYPES } from '@shared/constants';
 import ChannelPermissionFields from './ChannelPermissionFields';
 
 export default function CreateChannelModal() {
-  const { activeServer, modalState, closeModal, createChannel, setActiveChannel } = useServer();
+  const { activeServer, modalState, closeModal, createChannel, setActiveChannel, categoryForNewChannel } = useServer();
   const [name, setName] = useState('');
   const [type, setType] = useState(CHANNEL_TYPES.TEXT);
   const [readOnly, setReadOnly] = useState(false);
   const [allowedRoles, setAllowedRoles] = useState(null);
+  const [isLobby, setIsLobby] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -30,7 +31,9 @@ export default function CreateChannelModal() {
         name: name.trim(),
         type,
         readOnly: type === CHANNEL_TYPES.TEXT && readOnly,
-        allowedRoles
+        allowedRoles,
+        categoryId: categoryForNewChannel,
+        isLobby: type === CHANNEL_TYPES.VOICE && isLobby
       });
 
       if (data?.channel && data.channel.type === CHANNEL_TYPES.TEXT) {
@@ -41,6 +44,7 @@ export default function CreateChannelModal() {
       setType(CHANNEL_TYPES.TEXT);
       setReadOnly(false);
       setAllowedRoles(null);
+      setIsLobby(false);
     } catch (err) {
       setError(err.message || 'Erro ao criar canal.');
     } finally {
@@ -104,6 +108,16 @@ export default function CreateChannelModal() {
                 autoFocus
               />
             </div>
+
+            {type === CHANNEL_TYPES.VOICE && (
+              <label className="toggle-row">
+                <input type="checkbox" checked={isLobby} onChange={(e) => setIsLobby(e.target.checked)} />
+                <div>
+                  <strong>Sala de criação automática</strong>
+                  <span>Quem entrar ganha uma sala temporária própria, apagada quando todos saem.</span>
+                </div>
+              </label>
+            )}
 
             <ChannelPermissionFields
               type={type}

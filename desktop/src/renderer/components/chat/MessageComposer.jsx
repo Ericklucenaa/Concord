@@ -1,5 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Paperclip, Send, Smile, X, FileText, Lock, CornerUpLeft } from 'lucide-react';
+import { Paperclip, Send, Smile, X, FileText, Lock, CornerUpLeft, Mic, Square, BarChart3, Trash2 } from 'lucide-react';
+import GifPicker, { gifsEnabled } from './GifPicker';
 import EmojiPickerPopover from '../EmojiPickerPopover';
 import { formatBytes, MAX_ATTACHMENT_BYTES } from '../../services/cloud/attachments';
 import { MAX_CONTENT_LENGTH } from '../../services/cloud/messages';
@@ -7,6 +8,59 @@ import { defaultAvatar } from '../../services/cloud/util';
 
 const MENTION_QUERY = /(^|\s)@([\p{L}\p{N}_.]*)$/u;
 const MAX_FILES = 5;
+const MAX_VOICE_SECONDS = 120;
+
+function formatSeconds(sec) {
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+/** Records a short voice message with MediaRecorder (Opus in WebM). */
+function useVoiceRecorder(onDone, onError) {
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+  const cancelledRef = useRef(false);
+
+  const stop = (cancel = false) => {
+    cancelledRef.current = cancel;
+    clearInterval(timerRef.current);
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    setRecording(false);
+  };
+
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      chunksRef.current = [];
+      cancelledRef.current = false;
+      recorder.ondataavailable = (e) => e.data.size && chunksRef.current.push(e.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (cancelledRef.current || chunksRef.current.length === 0) return;
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        onDone(new File([blob], `mensagem-de-voz-${Date.now()}.webm`, { type: 'audio/webm' }));
+      };
+      recorder.start(250);
+      recorderRef.current = recorder;
+      setSeconds(0);
+      setRecording(true);
+      timerRef.current = setInterval(() => {
+        setSeconds((s) => {
+          if (s + 1 >= MAX_VOICE_SECONDS) stop(false);
+          return s + 1;
+        });
+      }, 1000);
+    } catch {
+      onError?.('Não foi possível acessar o microfone para gravar.');
+    }
+  };
+
+  useEffect(() => () => stop(true), []);
+  return { recording, seconds, start, stop };
+}
 
 function draftKey(key) {
   return `concord_draft_${key}`;
@@ -29,6 +83,7 @@ const MessageComposer = forwardRef(function MessageComposer(
     onTyping,
     onEditLast,
     onError,
+    onCreatePoll,
     uploadProgress
   },
   ref
@@ -36,11 +91,18 @@ const MessageComposer = forwardRef(function MessageComposer(
   const [text, setText] = useState(() => localStorage.getItem(draftKey(scopeKey)) || '');
   const [files, setFiles] = useState([]); // { file, previewUrl }
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
   const [mention, setMention] = useState(null); // { query, start }
   const [mentionIndex, setMentionIndex] = useState(0);
   const [sending, setSending] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
+  const voice = useVoiceRecorder(
+    (file) => {
+      Promise.resolve(onSend('', [file])).catch((err) => onError?.(err.message || 'Não foi possível enviar o áudio.'));
+    },
+    onError
+  );
 
   // Restore the draft of the conversation being shown.
   useEffect(() => {
@@ -261,6 +323,19 @@ const MessageComposer = forwardRef(function MessageComposer(
         <div className="upload-progress"><div style={{ width: `${uploadProgress}%` }} /></div>
       )}
 
+      {voice.recording ? (
+        <div className="chat-input-box recording">
+          <span className="rec-dot" />
+          <span className="rec-time">{formatSeconds(voice.seconds)} / {formatSeconds(MAX_VOICE_SECONDS)}</span>
+          <span className="rec-hint">Gravando mensagem de voz…</span>
+          <button className="icon-btn hover-danger" onClick={() => voice.stop(true)} title="Descartar" aria-label="Descartar gravação">
+            <Trash2 size={17} />
+          </button>
+          <button className="btn btn-primary" onClick={() => voice.stop(false)} title="Enviar áudio" style={{ height: 34 }}>
+            <Square size={13} /> Enviar
+          </button>
+        </div>
+      ) : (
       <div className="chat-input-box">
         <input
           ref={fileInputRef}
@@ -272,9 +347,14 @@ const MessageComposer = forwardRef(function MessageComposer(
             e.target.value = '';
           }}
         />
-        <button className="icon-btn" onClick={() => fileInputRef.current?.click()} title="Anexar arquivos (até 8 MB)">
+        <button className="icon-btn" onClick={() => fileInputRef.current?.click()} title="Anexar arquivos (até 8 MB)" aria-label="Anexar arquivos">
           <Paperclip size={18} />
         </button>
+        {onCreatePoll && (
+          <button className="icon-btn" onClick={onCreatePoll} title="Criar enquete" aria-label="Criar enquete">
+            <BarChart3 size={18} />
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           className="chat-textarea"
@@ -290,21 +370,43 @@ const MessageComposer = forwardRef(function MessageComposer(
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
+        {gifsEnabled && (
+          <button className="icon-btn gif-toggle" onClick={() => setGifOpen((v) => !v)} title="GIFs" aria-label="Enviar GIF">
+            <span className="gif-label">GIF</span>
+          </button>
+        )}
         <div style={{ position: 'relative' }}>
           <button className="icon-btn" onClick={() => setEmojiOpen((v) => !v)} title="Emojis">
             <Smile size={18} />
           </button>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={submit}
-          disabled={sending || (!text.trim() && files.length === 0)}
-          style={{ padding: '6px 12px', borderRadius: 'var(--radius-sm)' }}
-          title="Enviar (Enter)"
-        >
-          <Send size={15} />
-        </button>
+        {!text.trim() && files.length === 0 ? (
+          <button className="icon-btn" onClick={voice.start} title="Gravar mensagem de voz" aria-label="Gravar mensagem de voz">
+            <Mic size={18} />
+          </button>
+        ) : (
+          <button
+            className="btn btn-primary composer-send"
+            onClick={submit}
+            disabled={sending}
+            title="Enviar (Enter)"
+            aria-label="Enviar mensagem"
+          >
+            <Send size={15} />
+          </button>
+        )}
       </div>
+      )}
+
+      {gifOpen && (
+        <GifPicker
+          onClose={() => setGifOpen(false)}
+          onSelect={(url) => {
+            setGifOpen(false);
+            Promise.resolve(onSend(url, [])).catch((err) => onError?.(err.message || 'Não foi possível enviar o GIF.'));
+          }}
+        />
+      )}
 
       {emojiOpen && (
         <EmojiPickerPopover
