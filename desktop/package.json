@@ -59,7 +59,8 @@
     },
     "portable": {
       "artifactName": "Concord-Portable-${version}.${ext}"
-    }
+    },
+    "npmRebuild": false
   },
   "dependencies": {
     "uiohook-napi": "^1.5.5"
