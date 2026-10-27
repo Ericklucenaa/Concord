@@ -16,7 +16,7 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       partition: 'persist:concord'
     }
   });
@@ -76,11 +76,36 @@ const http = require('http');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
+// Security: the auto-updater downloads and EXECUTES an installer, so the URL
+// must never be attacker-controlled (e.g. poisoned via the cloud version doc).
+// Only HTTPS downloads from the official GitHub release infrastructure are allowed.
+const ALLOWED_UPDATE_HOST_PATTERNS = [
+  /(^|\.)github\.com$/i,
+  /(^|\.)githubusercontent\.com$/i
+];
+
+function isAllowedUpdateUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return false;
+    return ALLOWED_UPDATE_HOST_PATTERNS.some((re) => re.test(parsed.hostname));
+  } catch (e) {
+    return false;
+  }
+}
+
 function downloadFile(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
 
     function makeRequest(currentUrl) {
+      // Re-validate on every hop so a redirect cannot escape the allowlist.
+      if (!isAllowedUpdateUrl(currentUrl)) {
+        file.close();
+        fs.unlink(dest, () => {});
+        return reject(new Error('Update URL bloqueada: origem não confiável.'));
+      }
+
       const client = currentUrl.startsWith('https:') ? https : http;
 
       const req = client.get(currentUrl, {
@@ -143,14 +168,26 @@ ipcMain.handle('app:open-external', (_, url) => {
 });
 
 // Auto-Update Download and Silent/Instant Install
+const OFFICIAL_RELEASES_PAGE = 'https://github.com/Ericklucenaa/Concord/releases/latest';
+
 ipcMain.handle('updater:download-and-install', async (event, { downloadUrl, version }) => {
   try {
+    // Only accept a clean semver so it cannot be used to build a malicious URL/path.
+    const safeVersion = typeof version === 'string' && /^\d+\.\d+\.\d+$/.test(version) ? version : null;
+
     const tempDir = app.getPath('temp');
-    const destPath = path.join(tempDir, `Concord-Setup-${version || Date.now()}.exe`);
+    const destPath = path.join(tempDir, `Concord-Setup-${safeVersion || Date.now()}.exe`);
 
     let targetUrl = downloadUrl;
     if (!targetUrl || targetUrl.endsWith('/releases') || targetUrl.endsWith('/releases/latest')) {
-      targetUrl = `https://github.com/Ericklucenaa/Concord/releases/download/v${version}/Concord-Setup-${version}.exe`;
+      if (!safeVersion) throw new Error('Versão de atualização inválida.');
+      targetUrl = `https://github.com/Ericklucenaa/Concord/releases/download/v${safeVersion}/Concord-Setup-${safeVersion}.exe`;
+    }
+
+    // Reject any URL not on the official GitHub release hosts (defends against a
+    // poisoned cloud version document pointing at malware).
+    if (!isAllowedUpdateUrl(targetUrl)) {
+      throw new Error('URL de atualização não confiável foi bloqueada.');
     }
 
     await downloadFile(targetUrl, destPath, (progress) => {
@@ -167,10 +204,9 @@ ipcMain.handle('updater:download-and-install', async (event, { downloadUrl, vers
 
     return { success: true };
   } catch (error) {
-    console.error('Auto update error, falling back to browser download:', error);
-    if (downloadUrl) {
-      shell.openExternal(downloadUrl);
-    }
+    console.error('Auto update error, falling back to official releases page:', error);
+    // Never open a client-supplied URL; always send the user to the official page.
+    shell.openExternal(OFFICIAL_RELEASES_PAGE);
     return { success: false, error: error.message };
   }
 });

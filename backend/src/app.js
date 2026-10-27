@@ -23,9 +23,30 @@ const limiter = rateLimit({
   message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
 });
 
+// CORS: allow native (Electron / no-Origin / tests) requests, plus an explicit
+// allowlist of web origins. Browsers from unknown origins are blocked.
+const WEB_ORIGIN_ALLOWLIST = new Set(
+  [
+    ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(','),
+    'http://localhost:5173',
+    'https://concord-3af70.web.app',
+    'https://concord-3af70.firebaseapp.com'
+  ]
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
 // Middleware
 app.use(limiter);
-app.use(cors({ origin: '*' }));
+app.use(
+  cors({
+    origin(origin, callback) {
+      // No Origin header => native app (Electron), curl, server-to-server, tests.
+      if (!origin) return callback(null, true);
+      return callback(null, WEB_ORIGIN_ALLOWLIST.has(origin));
+    }
+  })
+);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

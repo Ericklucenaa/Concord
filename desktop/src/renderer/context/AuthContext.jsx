@@ -260,11 +260,10 @@ export function AuthProvider({ children }) {
 
   const loginGoogle = async (googleUser) => {
     try {
+      // Send the Firebase ID token so the backend can verify the identity
+      // server-side. The backend ignores any client-supplied email/uid.
       const data = await api.loginWithGoogle({
-        email: googleUser.email,
-        displayName: googleUser.displayName,
-        photoURL: googleUser.photoURL,
-        uid: googleUser.uid
+        idToken: googleUser.accessToken
       });
       api.setToken(data.token);
       setToken(data.token);

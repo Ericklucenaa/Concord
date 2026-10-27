@@ -3,6 +3,8 @@ import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { db } from '../db/database.js';
 import { USER_STATUS } from '../../../shared/constants.js';
+import { getJwtSecret, getJwtExpiresIn } from '../config.js';
+import { verifyFirebaseIdToken, isGoogleLoginConfigured } from '../services/firebaseAdmin.js';
 
 export async function register(req, res) {
   try {
@@ -53,9 +55,11 @@ export async function register(req, res) {
       [userId, trimmedUsername, trimmedEmail, passwordHash, avatar, USER_STATUS.ONLINE]
     );
 
-    const secret = process.env.JWT_SECRET || 'super_secret_jwt_key_change_in_production_123456789';
-    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign({ id: userId, username: trimmedUsername, email: trimmedEmail }, secret, { expiresIn });
+    const token = jwt.sign(
+      { id: userId, username: trimmedUsername, email: trimmedEmail },
+      getJwtSecret(),
+      { expiresIn: getJwtExpiresIn() }
+    );
 
     const user = {
       id: userId,
@@ -104,9 +108,11 @@ export async function login(req, res) {
     // Set online
     await db.run('UPDATE users SET status = ? WHERE id = ?', [USER_STATUS.ONLINE, user.id]);
 
-    const secret = process.env.JWT_SECRET || 'super_secret_jwt_key_change_in_production_123456789';
-    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign({ id: user.id, username: user.username, email: user.email }, secret, { expiresIn });
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      getJwtSecret(),
+      { expiresIn: getJwtExpiresIn() }
+    );
 
     const safeUser = {
       id: user.id,
@@ -244,13 +250,29 @@ export async function updateProfile(req, res) {
 
 export async function loginWithGoogle(req, res) {
   try {
-    const { email, displayName, photoURL } = req.body;
+    const { idToken } = req.body;
 
-    if (!email) {
-      return res.status(400).json({ error: 'E-mail do Google é obrigatório.' });
+    // Security: never trust an email/uid from the request body. Require a
+    // Firebase ID token and verify its signature server-side.
+    if (!idToken) {
+      return res.status(400).json({ error: 'Token de autenticação do Google é obrigatório.' });
     }
 
-    const trimmedEmail = email.trim().toLowerCase();
+    if (!isGoogleLoginConfigured()) {
+      return res.status(503).json({
+        error: 'Login com Google não está configurado neste servidor.'
+      });
+    }
+
+    const decoded = await verifyFirebaseIdToken(idToken);
+    if (!decoded || !decoded.email) {
+      return res.status(401).json({ error: 'Token do Google inválido ou expirado.' });
+    }
+
+    // Identity comes ONLY from the verified token, not from the client.
+    const trimmedEmail = String(decoded.email).trim().toLowerCase();
+    const displayName = decoded.name || '';
+    const photoURL = decoded.picture || '';
 
     // 1. Check if user already exists
     let user = await db.get('SELECT * FROM users WHERE email = ?', [trimmedEmail]);
@@ -298,9 +320,11 @@ export async function loginWithGoogle(req, res) {
       user.status = USER_STATUS.ONLINE;
     }
 
-    const secret = process.env.JWT_SECRET || 'super_secret_jwt_key_change_in_production_123456789';
-    const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-    const token = jwt.sign({ id: user.id, username: user.username, email: user.email }, secret, { expiresIn });
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      getJwtSecret(),
+      { expiresIn: getJwtExpiresIn() }
+    );
 
     return res.json({
       message: 'Login com Google realizado com sucesso!',

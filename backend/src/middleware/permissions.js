@@ -72,10 +72,12 @@ export async function checkChannelPermission(channelId, userId, permissionKey) {
     [channelId, member.role]
   );
 
-  if (perm && perm[permissionKey] !== undefined) {
+  if (perm && perm[permissionKey] !== undefined && perm[permissionKey] !== null) {
     return Boolean(perm[permissionKey]);
   }
 
-  // Default permissions if not overridden
+  // Fail-safe default: private channels deny when no explicit permission is set;
+  // public channels keep the permissive default for members.
+  if (channel.is_private) return false;
   return true;
 }
