@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { X, Check, Trash2, Mail, Users, Link as LinkIcon, Copy, ExternalLink, ArrowRight } from 'lucide-react';
+import { inviteLinkFor } from '../../services/cloud/servers';
+import { X, Check, Trash2, Mail, Link as LinkIcon, Copy } from 'lucide-react';
 import { useNotification } from '../../context/NotificationContext';
 
 export default function PendingInvitesModal() {
@@ -9,8 +10,7 @@ export default function PendingInvitesModal() {
     modalState, 
     closeModal, 
     pendingInvites, 
-    respondInvite,
-    joinByCode
+    respondInvite
   } = useServer();
   const [processingId, setProcessingId] = useState(null);
   const [copiedCode, setCopiedCode] = useState(null);
@@ -37,8 +37,7 @@ export default function PendingInvitesModal() {
   };
 
   const handleCopyLink = (code) => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
-    const link = `${origin}/#invite=${code}`;
+        const link = inviteLinkFor(code);
     navigator.clipboard.writeText(link);
     setCopiedCode(code);
     showToast('Link do convite copiado!', 'success');
@@ -80,8 +79,7 @@ export default function PendingInvitesModal() {
             pendingInvites.map((invite) => {
               const inviteId = invite.id || invite.code;
               const code = invite.code || '';
-              const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
-              const fullLink = invite.inviteLink || `${origin}/#invite=${code}`;
+              const fullLink = inviteLinkFor(code);
 
               return (
                 <div 

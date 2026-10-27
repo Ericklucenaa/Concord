@@ -1,83 +1,87 @@
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
+import {
+  getAuth,
+  connectAuthEmulator,
   setPersistence,
   browserLocalPersistence,
   indexedDBLocalPersistence,
-  GoogleAuthProvider, 
-  signInWithPopup, 
-  signInWithRedirect, 
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  signInWithCredential,
   getRedirectResult,
-  onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
   sendPasswordResetEmail,
   signOut
 } from 'firebase/auth';
-
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  collection, 
-  query, 
-  where, 
-  getDocs, 
-  onSnapshot, 
-  updateDoc, 
-  arrayUnion, 
-  deleteDoc 
+import {
+  initializeFirestore,
+  connectFirestoreEmulator,
+  persistentLocalCache,
+  persistentMultipleTabManager
 } from 'firebase/firestore';
+import { logWarn } from './log';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCHJQ3k7Xnc0bbs2n6YzCdIe6gfHmSDSjo",
-  authDomain: "concord-3af70.firebaseapp.com",
-  projectId: "concord-3af70",
-  storageBucket: "concord-3af70.firebasestorage.app",
-  messagingSenderId: "585039727575",
-  appId: "1:585039727575:web:1510b9ce9761b9af2d1992"
+  apiKey: 'AIzaSyCHJQ3k7Xnc0bbs2n6YzCdIe6gfHmSDSjo',
+  authDomain: 'concord-3af70.firebaseapp.com',
+  projectId: 'concord-3af70',
+  storageBucket: 'concord-3af70.firebasestorage.app',
+  messagingSenderId: '585039727575',
+  appId: '1:585039727575:web:1510b9ce9761b9af2d1992'
 };
 
-const app = initializeApp(firebaseConfig);
+const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
+const useEmulator = env.VITE_FIREBASE_EMULATOR === '1';
+const hasIndexedDB = typeof indexedDB !== 'undefined';
+
+export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
-// Force persistent session storage across desktop reboots and browser sessions
-try {
-  setPersistence(auth, browserLocalPersistence).catch(() => {
-    setPersistence(auth, indexedDBLocalPersistence).catch(() => {});
-  });
-} catch (e) {}
+// Offline cache keeps the app usable on flaky connections and cuts repeated
+// document reads (and Firestore billing) when switching channels.
+export const firestore = initializeFirestore(
+  app,
+  hasIndexedDB && !useEmulator
+    ? { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }
+    : {}
+);
 
-export const firestore = getFirestore(app);
+if (useEmulator) {
+  connectAuthEmulator(auth, `http://${env.VITE_AUTH_EMULATOR_HOST || '127.0.0.1:9099'}`, { disableWarnings: true });
+  const [host, port] = (env.VITE_FIRESTORE_EMULATOR_HOST || '127.0.0.1:8085').split(':');
+  connectFirestoreEmulator(firestore, host, Number(port));
+} else if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch(() =>
+    setPersistence(auth, indexedDBLocalPersistence).catch((err) => logWarn('auth persistence', err))
+  );
+}
 
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account'
-});
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-// Check if running in Electron desktop app vs Web Browser
-const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI);
-
+/**
+ * Google sign-in. In the browser this opens a popup. Inside Electron the popup
+ * is blocked by Google, so the main process opens the hosted bridge page, which
+ * returns the Google OAuth credential (not a Firebase session), and we sign in
+ * with it here so this renderer owns a real Firebase Auth session.
+ */
 export async function signInWithGoogle() {
   if (typeof window !== 'undefined' && window.electronAPI?.signInWithGoogleNative) {
-    const electronUser = await window.electronAPI.signInWithGoogleNative();
-    return electronUser;
+    const credentialData = await window.electronAPI.signInWithGoogleNative();
+    if (!credentialData) return null;
+    const credential = GoogleAuthProvider.credential(credentialData.idToken || null, credentialData.accessToken || null);
+    const result = await signInWithCredential(auth, credential);
+    return result.user;
   }
 
   try {
     const result = await signInWithPopup(auth, googleProvider);
-    return {
-      uid: result.user.uid,
-      displayName: result.user.displayName,
-      email: result.user.email,
-      photoURL: result.user.photoURL,
-      accessToken: await result.user.getIdToken()
-    };
+    return result.user;
   } catch (err) {
     if (err.code === 'auth/popup-blocked' || err.code === 'auth/cancelled-popup-request') {
-      console.warn('Popup blocked, falling back to redirect flow:', err);
       await signInWithRedirect(auth, googleProvider);
       return null;
     }
@@ -85,73 +89,53 @@ export async function signInWithGoogle() {
   }
 }
 
+/** Used by the hosted bridge page: signs in with a popup and returns the raw OAuth credential. */
+export async function getGoogleOAuthCredential() {
+  const result = await signInWithPopup(auth, googleProvider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (!credential) throw new Error('O Google não retornou uma credencial válida.');
+  return { idToken: credential.idToken || null, accessToken: credential.accessToken || null };
+}
+
 export async function checkRedirectResult() {
   try {
     const result = await getRedirectResult(auth);
-    if (result && result.user) {
-      return {
-        uid: result.user.uid,
-        displayName: result.user.displayName,
-        email: result.user.email,
-        photoURL: result.user.photoURL,
-        accessToken: await result.user.getIdToken()
-      };
-    }
+    return result?.user || null;
   } catch (err) {
-    console.error('Error getting redirect result:', err);
+    logWarn('google redirect result', err);
+    return null;
   }
-  return null;
 }
 
-export async function signInWithEmail(emailOrUsername, password) {
-  const cleanInput = emailOrUsername.trim();
-  const email = cleanInput.includes('@') ? cleanInput : `${cleanInput.toLowerCase()}@concord.app`;
+export function syntheticEmailFor(username) {
+  return `${username.trim().toLowerCase()}@concord.app`;
+}
+
+export async function signInWithEmail(email, password) {
   const result = await signInWithEmailAndPassword(auth, email, password);
-  return {
-    uid: result.user.uid,
-    displayName: result.user.displayName || cleanInput.split('@')[0],
-    email: result.user.email,
-    photoURL: result.user.photoURL,
-    accessToken: await result.user.getIdToken()
-  };
+  return result.user;
 }
 
-export async function signUpWithEmail(username, email, password) {
-  const cleanUser = username.trim();
-  const cleanEmail = email && email.trim() ? email.trim() : `${cleanUser.toLowerCase()}@concord.app`;
-  const result = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-  
-  if (cleanUser) {
-    try {
-      await updateProfile(result.user, {
-        displayName: cleanUser,
-        photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanUser)}`
-      });
-    } catch (e) {
-      console.warn('Profile name update error:', e);
-    }
+export async function signUpWithEmail(username, email, password, avatar) {
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  try {
+    await updateProfile(result.user, { displayName: username, photoURL: avatar });
+  } catch (err) {
+    logWarn('auth profile update', err);
   }
-
-  return {
-    uid: result.user.uid,
-    displayName: cleanUser || cleanEmail.split('@')[0],
-    email: result.user.email,
-    photoURL: result.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanUser)}`,
-    accessToken: await result.user.getIdToken()
-  };
+  return result.user;
 }
 
 export async function signOutFirebase() {
   try {
     await signOut(auth);
   } catch (err) {
-    console.warn('Sign out error:', err);
+    logWarn('sign out', err);
   }
 }
 
 export async function resetPasswordWithEmail(email) {
   if (!email || !email.trim()) throw new Error('Informe seu e-mail para receber o link de redefinição.');
-  const cleanEmail = email.trim();
-  await sendPasswordResetEmail(auth, cleanEmail);
+  await sendPasswordResetEmail(auth, email.trim());
   return true;
 }

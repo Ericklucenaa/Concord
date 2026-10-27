@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { X, Sparkles, LogIn, Upload, RefreshCw, Camera, Image as ImageIcon } from 'lucide-react';
-
-const DEFAULT_APP_ICON = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='26' fill='url(%23g)'/><circle cx='50' cy='50' r='12' fill='%23ffffff'/><path d='M 30 50 A 20 20 0 0 1 70 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/><path d='M 20 50 A 30 30 0 0 1 80 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' opacity='0.6'/></svg>";
+import { X, Sparkles, LogIn, Upload, RefreshCw, Camera } from 'lucide-react';
+import { compressImage } from '../../services/cloud/attachments';
+import { DEFAULT_SERVER_ICON as DEFAULT_APP_ICON } from '../../services/cloud/servers';
 
 export default function CreateServerModal() {
   const { modalState, closeModal, createServer, joinByCode } = useServer();
@@ -26,17 +26,12 @@ export default function CreateServerModal() {
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError('A imagem deve ter no máximo 5MB.');
-      return;
-    }
-
     setError('');
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setIcon(event.target.result);
-    };
-    reader.readAsDataURL(file);
+    // Icons live inside the server document, so keep them small.
+    compressImage(file, { maxDim: 256, quality: 0.9 })
+      .then(setIcon)
+      .catch(() => setError('Não foi possível ler esta imagem (GIFs animados não são suportados como ícone).'));
+    e.target.value = '';
   };
 
   const handleRandomIcon = () => {

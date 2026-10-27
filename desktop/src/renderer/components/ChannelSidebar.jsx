@@ -3,43 +3,60 @@ import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
 import { useVoice } from '../context/VoiceContext';
 import { useScreenShare } from '../context/ScreenShareContext';
-import { 
-  Hash, 
-  Volume2, 
+import {
+  Hash,
+  Volume2,
   VolumeX,
-  Plus, 
-  ChevronDown, 
-  UserPlus, 
-  Settings, 
-  LogOut, 
+  Plus,
+  ChevronDown,
+  UserPlus,
+  Settings,
+  LogOut,
   Trash2,
   Image as ImageIcon,
-  Mic, 
-  MicOff, 
-  Headphones, 
-  Tv, 
+  Mic,
+  MicOff,
+  Headphones,
+  Tv,
   PhoneOff,
   Radio,
-  Sliders,
   X,
   Sparkles,
-  UserX
+  UserX,
+  Lock,
+  Megaphone,
+  Signal
 } from 'lucide-react';
-import { CHANNEL_TYPES, ROLES, USER_STATUS } from '@shared/constants';
+import { CHANNEL_TYPES } from '@shared/constants';
 import SoundboardModal from './SoundboardModal';
+import ChannelSettingsModal from './modals/ChannelSettingsModal';
+import UserFooter from './UserFooter';
 import { useNotification } from '../context/NotificationContext';
+import { useUnread } from '../context/UnreadContext';
+import { isAdmin, isModerator, isChannelReadOnly, channelAllowedRoles } from '../services/permissions';
+
+const QUALITY_LABEL = {
+  good: 'Conexão boa',
+  ok: 'Conexão instável',
+  bad: 'Conexão ruim',
+  connecting: 'Conectando…',
+  unknown: 'Conectado'
+};
 
 export default function ChannelSidebar() {
-  const { showConfirm, showSuccess, showError } = useNotification();
-  const { 
-    activeServer, 
-    activeChannel, 
-    setActiveChannel, 
+  const { showConfirm } = useNotification();
+  const {
+    activeServer,
+    activeChannel,
+    visibleChannels,
+    setActiveChannel,
     openModal,
     deleteServer,
     leaveServer,
     deleteChannel
   } = useServer();
+  const { isChannelUnread, channelMentionCount } = useUnread();
+  const [editingChannel, setEditingChannel] = useState(null);
   const { user } = useAuth();
   const { 
     activeVoiceChannel, 
@@ -51,17 +68,19 @@ export default function ChannelSidebar() {
     isMuted, 
     isDeafened, 
     isSpeaking,
-    toggleMute, 
+    toggleMute,
     toggleDeafen,
     userVolumes,
-    setUserVolume
+    setUserVolume,
+    connectionQuality,
+    averagePing,
+    isServerMuted
   } = useVoice();
   const { 
     isScreenSharing, 
     setIsPickerOpen, 
     stopScreenShare, 
-    watchStream,
-    activePresenter 
+    watchStream
   } = useScreenShare();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -102,59 +121,16 @@ export default function ChannelSidebar() {
         <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13, flex: 1 }}>
           Selecione ou crie um servidor à esquerda para começar a conversar.
         </div>
-
-        {/* User Footer Bar (always available, even with no server yet) */}
-        <footer className="user-footer-bar">
-          <div
-            className="user-profile-summary"
-            onClick={() => openModal('settings')}
-            title="Abrir Configurações do Usuário"
-          >
-            <div className="avatar-wrapper">
-              <img
-                src={user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username}`}
-                alt={user?.username}
-                className="avatar-img"
-              />
-              <div className={`status-dot ${user?.status || 'online'}`} />
-            </div>
-            <div className="user-names">
-              <span className="user-username">{user?.username}</span>
-              <span className="user-tag">#{user?.id ? user.id.substring(0, 4) : '0000'}</span>
-            </div>
-          </div>
-
-          <div className="user-controls">
-            <button
-              className={`icon-btn ${isMuted ? 'active' : ''}`}
-              onClick={toggleMute}
-              title={isMuted ? 'Desmutar' : 'Mutar'}
-            >
-              {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-            </button>
-            <button
-              className={`icon-btn ${isDeafened ? 'active' : ''}`}
-              onClick={toggleDeafen}
-              title={isDeafened ? 'Desensurdecer' : 'Ensurdecer'}
-            >
-              <Headphones size={18} />
-            </button>
-            <button
-              className="icon-btn"
-              onClick={() => openModal('settings')}
-              title="Configurações"
-            >
-              <Settings size={18} />
-            </button>
-          </div>
-        </footer>
+        <UserFooter />
       </aside>
     );
   }
 
-  const isStaff = activeServer.role === ROLES.OWNER || activeServer.role === ROLES.ADMIN;
-  const textChannels = activeServer.channels?.filter((c) => c.type === CHANNEL_TYPES.TEXT) || [];
-  const voiceChannels = activeServer.channels?.filter((c) => c.type === CHANNEL_TYPES.VOICE) || [];
+  const isStaff = isAdmin(activeServer, user?.id);
+  const canModerateVoice = isModerator(activeServer, user?.id);
+  const isServerOwner = activeServer.ownerId === user?.id;
+  const textChannels = visibleChannels.filter((c) => c.type === CHANNEL_TYPES.TEXT);
+  const voiceChannels = visibleChannels.filter((c) => c.type === CHANNEL_TYPES.VOICE);
 
   return (
     <aside className="channel-sidebar">
@@ -224,7 +200,7 @@ export default function ChannelSidebar() {
                 <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
               </>
             )}
-                 {activeServer?.ownerId === user?.id || activeServer?.role === ROLES.OWNER || activeServer?.role === 'owner' ? (
+            {isServerOwner ? (
               <button 
                 className="dropdown-item btn-secondary" 
                 style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
@@ -295,23 +271,28 @@ export default function ChannelSidebar() {
 
           {textChannels.map((channel) => {
             const isActive = activeChannel?.id === channel.id;
+            const unread = !isActive && isChannelUnread(channel.id);
+            const mentions = channelMentionCount(channel.id);
+            const ChannelIcon = isChannelReadOnly(activeServer, channel.id) ? Megaphone : Hash;
             return (
-              <div 
-                key={channel.id} 
-                className={`channel-item ${isActive ? 'active' : ''}`}
+              <div
+                key={channel.id}
+                className={`channel-item ${isActive ? 'active' : ''} ${unread ? 'unread' : ''}`}
                 onClick={() => setActiveChannel(channel)}
                 style={{ justifyContent: 'space-between' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
-                  <Hash className="channel-icon" />
+                  <ChannelIcon className="channel-icon" />
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {channel.name}
                   </span>
+                  {channelAllowedRoles(activeServer, channel.id) && <Lock size={11} className="muted-icon" />}
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <button 
-                    className="icon-btn" 
+                  {mentions > 0 && <span className="badge-counter inline">{mentions}</span>}
+                  <button
+                    className="icon-btn channel-hover-action"
                     style={{ padding: 2, opacity: 0.6 }}
                     title="Convidar para este canal"
                     onClick={(e) => {
@@ -321,6 +302,19 @@ export default function ChannelSidebar() {
                   >
                     <UserPlus size={13} />
                   </button>
+                  {isStaff && (
+                    <button
+                      className="icon-btn channel-hover-action"
+                      style={{ padding: 2, opacity: 0.6 }}
+                      title="Configurações do canal"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingChannel(channel);
+                      }}
+                    >
+                      <Settings size={13} />
+                    </button>
+                  )}
                   {isStaff && textChannels.length > 1 && (
                     <button 
                       className="icon-btn hover-danger" 
@@ -406,8 +400,8 @@ export default function ChannelSidebar() {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <button 
-                      className="icon-btn" 
+                    <button
+                      className="icon-btn channel-hover-action"
                       style={{ padding: 2, opacity: 0.6 }}
                       title="Convidar para este canal"
                       onClick={(e) => {
@@ -417,6 +411,19 @@ export default function ChannelSidebar() {
                     >
                       <UserPlus size={13} />
                     </button>
+                    {isStaff && (
+                      <button
+                        className="icon-btn channel-hover-action"
+                        style={{ padding: 2, opacity: 0.6 }}
+                        title="Configurações do canal"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingChannel(channel);
+                        }}
+                      >
+                        <Settings size={13} />
+                      </button>
+                    )}
                     {isStaff && voiceChannels.length > 1 && (
                       <button 
                         className="icon-btn hover-danger" 
@@ -645,7 +652,7 @@ export default function ChannelSidebar() {
                   </button>
                 </div>
 
-                <button
+                {canModerateVoice && <button
                   className="btn btn-secondary hover-danger"
                   style={{ width: '100%', padding: '7px 10px', fontSize: 12, justifyContent: 'center', color: 'var(--accent-danger)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}
                   onClick={async () => {
@@ -665,7 +672,7 @@ export default function ChannelSidebar() {
                 >
                   <UserX size={14} />
                   Desconectar do Canal
-                </button>
+                </button>}
               </div>
             ) : (
               <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
@@ -680,9 +687,14 @@ export default function ChannelSidebar() {
       {activeVoiceChannel && (
         <div className="active-voice-bar">
           <div className="active-voice-header">
-            <div className="voice-status-info">
-              <div className="voice-ping-dot" />
-              <span className="voice-channel-name">{activeVoiceChannel.name}</span>
+            <div className="voice-status-info" title={averagePing !== null ? `${QUALITY_LABEL[connectionQuality]} • ${averagePing} ms` : QUALITY_LABEL[connectionQuality]}>
+              <Signal size={14} className={`voice-quality ${connectionQuality}`} />
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <span className={`voice-quality-label ${connectionQuality}`}>
+                  {QUALITY_LABEL[connectionQuality]}{averagePing !== null ? ` • ${averagePing} ms` : ''}
+                </span>
+                <span className="voice-channel-name">{activeVoiceChannel.name}</span>
+              </div>
             </div>
             <button 
               className="icon-btn" 
@@ -737,57 +749,23 @@ export default function ChannelSidebar() {
         </div>
       )}
 
-      {/* User Footer Bar */}
-      <footer className="user-footer-bar">
-        <div 
-          className="user-profile-summary"
-          onClick={() => openModal('settings')}
-          title="Abrir Configurações do Usuário"
-        >
-          <div className="avatar-wrapper">
-            <img 
-              src={user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username}`} 
-              alt={user?.username} 
-              className="avatar-img" 
-            />
-            <div className={`status-dot ${user?.status || 'online'}`} />
-          </div>
-          <div className="user-names">
-            <span className="user-username">{user?.username}</span>
-            <span className="user-tag">#{user?.userTag || (user?.id ? String(user.id).substring(0, 4).toUpperCase() : '0000')}</span>
-          </div>
+      {isServerMuted && activeVoiceChannel && (
+        <div className="server-muted-banner">
+          <MicOff size={13} /> Um moderador silenciou você neste servidor
         </div>
+      )}
 
-        <div className="user-controls">
-          <button 
-            className={`icon-btn ${isMuted ? 'active' : ''}`}
-            onClick={toggleMute}
-            title={isMuted ? 'Desmutar' : 'Mutar'}
-          >
-            {isMuted ? <MicOff size={18} /> : <Mic size={18} />}
-          </button>
-          <button 
-            className={`icon-btn ${isDeafened ? 'active' : ''}`}
-            onClick={toggleDeafen}
-            title={isDeafened ? 'Desensurdecer' : 'Ensurdecer'}
-          >
-            <Headphones size={18} />
-          </button>
-          <button 
-            className="icon-btn"
-            onClick={() => openModal('settings')}
-            title="Configurações"
-          >
-            <Settings size={18} />
-          </button>
-        </div>
-      </footer>
+      <UserFooter />
 
       {/* Soundboard Modal */}
-      <SoundboardModal 
-        isOpen={isSoundboardOpen} 
-        onClose={() => setIsSoundboardOpen(false)} 
+      <SoundboardModal
+        isOpen={isSoundboardOpen}
+        onClose={() => setIsSoundboardOpen(false)}
       />
+
+      {editingChannel && (
+        <ChannelSettingsModal channel={editingChannel} onClose={() => setEditingChannel(null)} />
+      )}
     </aside>
   );
 }

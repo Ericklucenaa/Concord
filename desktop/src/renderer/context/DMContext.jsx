@@ -1,141 +1,108 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
-import { 
-  getDMConversationId, 
-  sendDirectMessageInCloud, 
-  listenToDirectMessagesInCloud, 
-  deleteDirectMessageFromCloud, 
-  toggleDirectMessageReactionInCloud,
-  sendFriendRequestInCloud,
-  respondFriendRequestInCloud,
-  listenToFriendsInCloud,
-  removeFriendInCloud,
-  findUserByNicknameInCloud
-} from '../services/cloudSync';
-import { showNativeNotification } from '../services/notificationService';
+import * as dms from '../services/cloud/dms';
+import * as friends from '../services/cloud/friends';
 
 const DMContext = createContext(null);
 
 export function DMProvider({ children }) {
   const { user } = useAuth();
-  const [activeDM, setActiveDM] = useState(null); // target user object
-  const [friendsList, setFriendsList] = useState([]);
-  const [directMessages, setDirectMessages] = useState([]);
-  const [activeTab, setActiveTab] = useState('online'); // 'online' | 'all' | 'pending' | 'add'
-  const [unreadDMs, setUnreadDMs] = useState(new Map());
+  const userId = user?.id;
 
-  // Listen to Friends and Friend Requests in real-time
+  const [threads, setThreads] = useState([]);
+  const [friendships, setFriendships] = useState([]);
+  const [blockedIds, setBlockedIds] = useState([]);
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [activeTab, setActiveTab] = useState('online'); // 'online' | 'all' | 'pending' | 'blocked' | 'add'
+
   useEffect(() => {
-    if (!user?.id || !user?.username) {
-      setFriendsList([]);
-      return;
+    if (!userId) {
+      setThreads([]);
+      setFriendships([]);
+      setBlockedIds([]);
+      setActiveThreadId(null);
+      return undefined;
     }
+    const unsubs = [
+      dms.listenToMyThreads(userId, setThreads),
+      friends.listenToFriendships(userId, setFriendships),
+      friends.listenToBlocks(userId, setBlockedIds)
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [userId]);
 
-    const unsub = listenToFriendsInCloud(user.username, user.id, (allFriendDocs) => {
-      setFriendsList(allFriendDocs);
-    });
+  const described = useMemo(
+    () => friendships.map((f) => friends.describeFriendship(f, userId)),
+    [friendships, userId]
+  );
+  const friendList = useMemo(() => described.filter((f) => f.status === 'accepted'), [described]);
+  const incomingRequests = useMemo(() => described.filter((f) => f.incoming), [described]);
+  const outgoingRequests = useMemo(() => described.filter((f) => f.outgoing), [described]);
 
-    return () => {
-      if (unsub) unsub();
-    };
-  }, [user?.id, user?.username]);
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) || null,
+    [threads, activeThreadId]
+  );
 
-  // Listen to Active DM messages in real-time
+  // Leave the thread view if I was removed from the group. The grace period
+  // covers a freshly created thread that has not reached the listener yet.
   useEffect(() => {
-    if (!user?.id || !activeDM?.id) {
-      setDirectMessages([]);
-      return;
-    }
+    if (!activeThreadId || activeThread) return undefined;
+    const timer = setTimeout(() => setActiveThreadId(null), 3000);
+    return () => clearTimeout(timer);
+  }, [activeThreadId, activeThread]);
 
-    const dmId = getDMConversationId(user.id, activeDM.id);
-    const unsub = listenToDirectMessagesInCloud(dmId, (msgs) => {
-      setDirectMessages(msgs);
+  const openDMWithUser = useCallback(async (target) => {
+    if (!target?.id || !user) return null;
+    const thread = await dms.ensureDirectThread(user, target);
+    setActiveThreadId(thread.id);
+    return thread;
+  }, [user]);
 
-      // Trigger native notification if the latest message was sent by the other user and window is not focused
-      if (msgs.length > 0) {
-        const lastMsg = msgs[msgs.length - 1];
-        if (String(lastMsg.senderId) !== String(user.id)) {
-          showNativeNotification(`Mensagem de @${activeDM.username}`, {
-            body: lastMsg.content || (lastMsg.attachment ? 'Enviou uma imagem' : 'Nova mensagem'),
-            icon: activeDM.avatar,
-            tag: `dm_${activeDM.id}`
-          });
-        }
-      }
-    });
-
-    return () => {
-      if (unsub) unsub();
-    };
-  }, [user?.id, activeDM?.id, activeDM?.username, activeDM?.avatar]);
-
-  const openDMWithUser = useCallback((targetUser) => {
-    if (!targetUser) return;
-    setActiveDM(targetUser);
+  const openThread = useCallback((threadOrId) => {
+    setActiveThreadId(typeof threadOrId === 'string' ? threadOrId : threadOrId?.id || null);
   }, []);
 
-  const closeDM = useCallback(() => {
-    setActiveDM(null);
-  }, []);
+  const closeDM = useCallback(() => setActiveThreadId(null), []);
 
-  const sendDirectMessage = async ({ content = '', attachment = null }) => {
-    if (!user?.id || !activeDM?.id) return;
-    const dmId = getDMConversationId(user.id, activeDM.id);
-    const newMsg = {
-      id: 'dm_msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-      dmId,
-      senderId: String(user.id),
-      senderUsername: user.username,
-      senderAvatar: user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.username}`,
-      content: content.trim(),
-      attachment: attachment || null,
-      reactions: {},
-      createdAt: new Date().toISOString()
-    };
-
-    await sendDirectMessageInCloud(dmId, newMsg);
+  const createGroup = async (members, name) => {
+    const thread = await dms.createGroupThread(user, members, name);
+    setActiveThreadId(thread.id);
+    return thread;
   };
 
-  const deleteDirectMessage = async (messageId) => {
-    await deleteDirectMessageFromCloud(messageId);
-  };
-
-  const toggleReaction = async (messageId, emoji) => {
-    if (!user?.id) return;
-    await toggleDirectMessageReactionInCloud(messageId, emoji, user.id);
-  };
-
-  const sendFriendRequest = async (targetNickname) => {
-    if (!user) throw new Error('Usuário não autenticado.');
-    return await sendFriendRequestInCloud(user, targetNickname);
-  };
-
-  const respondFriendRequest = async (requestId, action) => {
-    if (!user) return;
-    await respondFriendRequestInCloud(requestId, action, user);
-  };
-
-  const removeFriend = async (friendshipId) => {
-    await removeFriendInCloud(friendshipId);
+  const leaveGroup = async (thread) => {
+    await dms.leaveGroup(thread, userId);
+    if (activeThreadId === thread.id) setActiveThreadId(null);
   };
 
   return (
     <DMContext.Provider
       value={{
-        activeDM,
-        setActiveDM,
+        threads,
+        activeThread,
+        activeThreadId,
+        openThread,
         openDMWithUser,
         closeDM,
-        friendsList,
-        directMessages,
+        createGroup,
+        leaveGroup,
+        addToGroup: dms.addGroupMembers,
+        removeFromGroup: dms.removeGroupMember,
+        renameGroup: dms.renameGroup,
+        friendList,
+        incomingRequests,
+        outgoingRequests,
         activeTab,
         setActiveTab,
-        sendDirectMessage,
-        deleteDirectMessage,
-        toggleReaction,
-        sendFriendRequest,
-        respondFriendRequest,
-        removeFriend
+        sendFriendRequest: (nick) => friends.sendFriendRequest(user, nick),
+        respondFriendRequest: (friendship, action) =>
+          friends.respondFriendRequest(friendships.find((f) => f.id === friendship.friendshipId) || friendship, action, user),
+        removeFriend: friends.removeFriendship,
+        blockedIds,
+        isBlocked: (id) => blockedIds.includes(id),
+        blockUser: (targetId) => friends.blockUser(userId, targetId),
+        unblockUser: (targetId) => friends.unblockUser(userId, targetId)
       }}
     >
       {children}

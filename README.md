@@ -1,147 +1,74 @@
-# Concord — Aplicativo Desktop de Comunicação por Canais (MVP)
+# Concord
 
-Um aplicativo moderno, leve e completo para Windows (10/11) com chat de texto em tempo real, canais privados com controle hierárquico de permissões, salas de voz via **WebRTC Mesh** e transmissão de telas/janelas em alta fidelidade (**WebRTC Screen Sharing nativo**).
+Aplicativo de comunicação para Windows (e web) com chat de texto em tempo real, mensagens diretas, salas de voz e transmissão de tela.
 
----
+- **Web:** https://concord-3af70.web.app
+- **Instalador Windows:** [Releases](https://github.com/Ericklucenaa/Concord/releases/latest)
 
-## 🚀 Tecnologias Utilizadas
+## Funcionalidades
 
-* **Desktop Frontend**: Electron 34 + React 18 + Vite + Vanilla CSS moderno (Dark & Light themes, tipografia *Plus Jakarta Sans*).
-* **Backend API & Real-time**: Node.js + Express + Socket.IO + Rate Limiting.
-* **Banco de Dados**: SQLite com WAL Mode e Foreign Keys ativadas para alta performance e zero configuração externa.
-* **Segurança**: Criptografia de senhas com `bcryptjs` (salt 12) e autenticação segura via `JWT` validada no servidor.
-* **Comunicação em Tempo Real**:
-  * **Voz**: WebRTC Audio Mesh com STUN/TURN e detecção de fala em tempo real via Web Audio API (`AnalyserNode`).
-  * **Transmissão de Tela**: WebRTC Video Mesh com captura nativa do Windows via `desktopCapturer` (suporte a telas inteiras e janelas individuais, com preview em miniatura, 720p/1080p e 30/60 FPS).
-* **Empacotamento**: `electron-builder` com destino Windows NSIS (`.exe`) e atalhos na Área de Trabalho e Menu Iniciar.
+- Servidores com canais de texto e voz, convites por link/código ou direto para um @apelido
+- Cargos (dono, admin, moderador, membro), expulsar, banir, silenciar na voz, transferir propriedade e registro de moderação
+- Canais de avisos (somente leitura) e canais privados por cargo
+- Mensagens com markdown (`**negrito**`, `*itálico*`, `~~riscado~~`, `||spoiler||`, `` `código` ``, blocos de código, citações), edição, respostas, reações, mensagens fixadas, menções (`@apelido`, `@everyone`) e prévia de links
+- Arquivos de até 8 MB (imagens, vídeos, documentos), arrastar e soltar e colar
+- Indicadores de não lidas e menções, notificações nativas, "digitando…" e busca no canal ou no servidor inteiro
+- Mensagens diretas 1-a-1 e em grupo (até 10 pessoas), amigos e bloqueio
+- Status (online, ausente, não perturbe, invisível) e status personalizado com emoji e expiração
+- Voz em WebRTC com supressão de ruído, gate, aperte-para-falar (global no app de desktop), volume por pessoa (até 200%) e indicador de qualidade da conexão
+- Transmissão de tela 720p/1080p a 30/60 FPS, com áudio do sistema opcional no Windows
+- App de desktop com bandeja do sistema, iniciar com o Windows, links `concord://` e atualização automática verificada por SHA-256
+- Atalhos: `Ctrl+K` (ir para…), `Ctrl+F` (buscar), `↑` (editar última mensagem), `Alt+↑/↓` (trocar de canal), `Ctrl+Shift+M` (microfone)
 
----
-
-## 📁 Estrutura do Projeto
+## Arquitetura
 
 ```text
-/Concord
-  ├── /backend
-  │     ├── /database         # Arquivo SQLite persistido (concord.sqlite)
-  │     ├── /src
-  │     │     ├── /controllers  # Auth, Servidores, Canais, Mensagens, Convites, Membros
-  │     │     ├── /db           # Conexão SQLite, schema e inicialização
-  │     │     ├── /middleware   # Auth JWT, verificação de roles e permissões
-  │     │     ├── /routes       # Rotas REST
-  │     │     ├── /socket       # WebSocket Socket.IO (chat, presença, sinalização WebRTC)
-  │     │     ├── app.js        # Express app
-  │     │     └── server.js     # Inicialização do servidor HTTP e WebSocket
-  │     ├── /tests            # Testes automatizados com Node Test Runner
-  │     ├── .env.example
-  │     └── package.json
-  ├── /desktop
-  │     ├── /src
-  │     │     ├── /main         # Electron Main Process (desktopCapturer, IPC, janelas)
-  │     │     ├── /preload      # Preload script seguro com contextBridge
-  │     │     └── /renderer     # Frontend React + Vite
-  │     │           ├── /components  # Chat, Voz, Stream Player, Sidebars, Modais
-  │     │           ├── /context     # Auth, Socket, Server, Voice, ScreenShare
-  │     │           ├── /pages       # AuthPage (Login e Cadastro)
-  │     │           ├── /services    # API client
-  │     │           └── /styles      # Design System CSS
-  │     ├── electron-builder.yml
-  │     └── package.json
-  ├── /shared
-  │     └── constants.js      # Constantes de Roles, Eventos de Socket e ICE Servers
-  ├── package.json            # Scripts orquestradores
-  └── README.md
+desktop/
+  src/main/        Processo principal do Electron (janela, bandeja, atalho global, updater, prévia de links)
+  src/preload/     Ponte segura (contextBridge) entre o Electron e a interface
+  src/renderer/
+    context/       Estado da aplicação (auth, servidores, DMs, presença, não lidas, voz, tela)
+    services/cloud Acesso ao Firestore, separado por domínio
+    components/    Interface (chat compartilhado em components/chat)
+  tests/           Testes das regras de segurança e da camada de dados (emuladores do Firebase)
+firestore.rules    Regras de segurança — a única barreira entre clientes e os dados
+scripts/           Migração de dados e publicação de versões (credenciais de administrador)
 ```
 
----
+Todos os dados ficam no **Firebase** (Auth + Firestore). Não existe servidor próprio: a sinalização WebRTC também passa pelo Firestore. As permissões são garantidas pelas regras em `firestore.rules`, e o cliente apenas espelha essas regras para decidir o que mostrar.
 
-## ⚡ Como Executar em Desenvolvimento
+## Desenvolvimento
 
-### 1. Pré-requisitos
-* Node.js v18 ou superior instalado.
-* npm instalado.
-
-### 2. Instalação das Dependências
-Na raiz do projeto:
-```bash
-npm run install:all
-```
-
-### 3. Iniciar o Backend
-```bash
-npm run start:backend
-# ou em modo desenvolvimento com auto-reload:
-npm run dev:backend
-```
-O backend rodará em `http://localhost:4000`.
-
-### 4. Iniciar a Interface Desktop
-Em outro terminal:
-```bash
-npm run dev:desktop
-```
-A janela do aplicativo Concord abrirá automaticamente.
-
-### 5. Executar Tudo Simultaneamente
-```bash
-npm run dev
-```
-
----
-
-## 🧪 Como Rodar os Testes Automatizados
-
-Para executar os testes do backend cobrindo autenticação, criação de canais, validação de permissões, envio de convites e integridade do banco:
+Requisitos: Node.js 20+ e, para os testes, Java 21+.
 
 ```bash
-npm test
+npm install          # instala as dependências de desktop/
+npm start            # Vite + Electron
+npm run dev:web      # só a versão web em http://localhost:5173
 ```
 
----
-
-## 📦 Como Gerar o Instalador Windows (.exe)
-
-Para compilar a versão de produção e gerar o instalador executável para Windows:
+### Qualidade
 
 ```bash
-npm run package:win
+cd desktop
+npm run lint             # ESLint
+npm run build            # build de produção
+npm run test:emulators   # regras de segurança + camada de dados nos emuladores do Firebase
 ```
 
-O instalador será gerado na pasta `desktop/dist-electron/` contendo o arquivo `Concord Setup 1.0.0.exe`.
+O CI (GitHub Actions) roda lint, build e testes em todo push e PR. Em `main`, também publica a versão web no Firebase Hosting.
 
----
+### TURN (opcional)
 
-## ✨ Funcionalidades Principais Implementadas
+Para que voz e tela funcionem em redes restritivas (redes corporativas, 4G), configure um servidor TURN no build. Veja `desktop/.env.example`.
 
-1. **Autenticação e Perfil**:
-   * Cadastro com usuário único, e-mail único e senha segura com hash `bcrypt`.
-   * Login com validação no backend, token JWT e opção "Lembrar login".
-   * Troca de status em tempo real (🟢 Online, 🟡 Ausente, 🔴 Não Incomodar, ⚫ Offline).
-   * Personalização de avatar e alteração de senha.
+## Publicando
 
-2. **Canais e Servidores Privados**:
-   * Criação de servidores personalizados com canais de texto (`#`) e voz (`🔊`).
-   * Controle hierárquico de cargos: `Proprietário` > `Administrador` > `Moderador` > `Membro`.
+```bash
+firebase deploy --only firestore          # regras e índices
+cd desktop && npm run dist:win            # gera dist-electron/Concord-Setup-<versão>.exe
+cd .. && node scripts/publish-release.mjs "Notas da versão"
+firebase deploy --only hosting
+```
 
-3. **Sistema de Convites**:
-   * Convite direto por `@nome_do_usuario` com notificação e pop-up em tempo real.
-   * Geração de código de convite de 8 caracteres para compartilhamento rápido.
-
-4. **Chat de Texto em Tempo Real**:
-   * Envio e recebimento instantâneo via WebSocket.
-   * Histórico de mensagens persistido no banco SQLite.
-   * Indicador visual de digitação ("Usuário está digitando...").
-   * Exclusão de mensagens pelo autor ou equipe de moderação.
-
-5. **Chat de Voz WebRTC Real**:
-   * Conexão peer-to-peer de áudio com servidores STUN/TURN.
-   * Detecção de fala com efeito visual dinâmico (anel verde pulsante).
-   * Atalhos e botões para mutar/desmutar e desativar áudio (deafen).
-   * Silenciamento forçado por administradores (`muted_by_admin`).
-   * Teste de microfone com medidor de volume/decibéis em tempo real nas Configurações.
-
-6. **Transmissão de Tela WebRTC (Prioridade Máxima)**:
-   * Captura nativa de telas inteiras e janelas de programas no Windows via Electron.
-   * Janela modal com miniaturas ao vivo de todas as telas e janelas abertas.
-   * Transmissão em tempo real para todos os membros na sala de voz.
-   * Opções de qualidade adaptativa (720p, 1080p) e taxa de quadros (30 FPS e 60 FPS).
-   * Player de vídeo com modo Tela Cheia e identificador "AO VIVO".
+`publish-release.mjs` cria o release no GitHub e grava o manifesto de atualização (com o SHA-256 do instalador) no Firestore usando as credenciais do `gcloud`. Os clientes só leem esse manifesto; as regras impedem qualquer escrita por clientes.

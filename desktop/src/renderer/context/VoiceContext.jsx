@@ -1,1107 +1,884 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { useSocket } from './SocketContext';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
-import { api } from '../services/api';
-import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
-import { 
-  joinVoiceInCloud, 
-  leaveVoiceInCloud, 
-  switchVoiceRoomInCloud, 
-  listenToVoiceRoomInCloud, 
-  listenToSoundboardInCloud,
-  updateVoiceUserStateInCloud,
-  sendVoiceSignalInCloud,
-  listenToVoiceSignalsInCloud,
-  sendVoiceHeartbeatInCloud,
-  kickUserFromVoiceInCloud,
-  setUserPresenceInCloud
-} from '../services/cloudSync';
-import { soundSynthesizer } from '../services/soundEffects';
 import { useNotification } from './NotificationContext';
+import { getIceServers } from '../services/iceServers';
+import {
+  joinVoicePresence,
+  updateVoicePresence,
+  leaveVoicePresence,
+  disconnectFromVoice,
+  listenToServerVoice,
+  sendVoiceSignal,
+  listenToVoiceSignals,
+  playSoundboard,
+  listenToSoundboard,
+  VOICE_HEARTBEAT_MS
+} from '../services/cloud/voice';
+import { soundSynthesizer } from '../services/soundEffects';
+import { useSettings } from '../services/settings';
+import { logWarn, quietly } from '../services/log';
 
 const VoiceContext = createContext(null);
 
+const SPEAKING_THRESHOLD = 14;
+const STATS_INTERVAL_MS = 4000;
+
+function readBool(key) {
+  return localStorage.getItem(key) !== 'false';
+}
+
+function qualityFrom(stats) {
+  if (!stats) return 'unknown';
+  const { rtt = 0, loss = 0 } = stats;
+  if (rtt < 150 && loss < 2) return 'good';
+  if (rtt < 300 && loss < 8) return 'ok';
+  return 'bad';
+}
+
+/** Presence document -> the participant shape the UI uses. */
+function toParticipant(p) {
+  return {
+    userId: p.userId,
+    username: p.username,
+    avatar: p.avatar,
+    isMuted: Boolean(p.isMuted),
+    isDeafened: Boolean(p.isDeafened),
+    isScreenSharing: Boolean(p.isScreenSharing),
+    isCameraOn: Boolean(p.isCameraOn),
+    channelId: p.channelId,
+    serverId: p.serverId
+  };
+}
+
 export function VoiceProvider({ children }) {
   const { showError, showToast } = useNotification();
-  const { socket } = useSocket();
   const { user } = useAuth();
-  const { activeServer, serverMembers } = useServer();
+  const { activeServer, servers } = useServer();
+  const [settings] = useSettings();
+  const userId = user?.id;
 
-  const [activeVoiceChannel, setActiveVoiceChannel] = useState(null);
-  const [voiceUsers, setVoiceUsers] = useState([]);
-  const [voiceChannelUsersMap, setVoiceChannelUsersMap] = useState(new Map()); // Map<channelId, User[]>
+  const [activeVoiceChannel, setActiveVoiceChannel] = useState(null); // channel + serverId
+  const [voiceByServer, setVoiceByServer] = useState(new Map()); // serverId -> Map<channelId, presence[]>
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [micVolumeLevel, setMicVolumeLevel] = useState(0);
+  const [remoteSpeaking, setRemoteSpeaking] = useState(new Set());
+  const [isPttPressed, setIsPttPressed] = useState(false);
+  const [connectionStats, setConnectionStats] = useState(new Map()); // userId -> { rtt, loss }
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [localCameraStream, setLocalCameraStream] = useState(null);
 
   const [inputDevices, setInputDevices] = useState([]);
   const [outputDevices, setOutputDevices] = useState([]);
-  const [selectedInputDevice, setSelectedInputDevice] = useState('');
-  const [selectedOutputDevice, setSelectedOutputDevice] = useState('');
-  const [userVolumes, setUserVolumes] = useState(new Map());
-
-  const localStreamRef = useRef(null);
-  const peerConnectionsRef = useRef(new Map()); // Map<userId, RTCPeerConnection>
-  const remoteAudiosRef = useRef(new Map()); // Map<userId, HTMLAudioElement>
-  const iceCandidateQueuesRef = useRef(new Map()); // Map<userId, RTCIceCandidateInit[]>
-  const iceServersRef = useRef(DEFAULT_ICE_SERVERS);
-  const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
-  const animFrameRef = useRef(null);
-  const isMutedRef = useRef(false);
-  const isDeafenedRef = useRef(false);
-
-  // Sync ref with state
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
-
-  useEffect(() => {
-    isDeafenedRef.current = isDeafened;
-  }, [isDeafened]);
-
-  // Load ICE servers from backend on init
-  useEffect(() => {
-    async function loadIceConfig() {
-      try {
-        if (api.hasBackend()) {
-          const config = await api.getWebRTCConfig();
-          if (config.iceServers && config.iceServers.length > 0) {
-            iceServersRef.current = config.iceServers;
-          }
-        }
-      } catch (err) {}
-    }
-    loadIceConfig();
-  }, []);
-
-  // Enumerate & Validate Real Audio Devices
-  const refreshAudioDevices = useCallback(async (requestPermission = false) => {
+  const [selectedInputDevice, setSelectedInputDevice] = useState(() => localStorage.getItem('concord_input_device') || '');
+  const [selectedOutputDevice, setSelectedOutputDevice] = useState(() => localStorage.getItem('concord_output_device') || '');
+  const [userVolumes, setUserVolumes] = useState(() => {
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
-        return { inputs: [], outputs: [] };
-      }
+      return new Map(Object.entries(JSON.parse(localStorage.getItem('concord_user_volumes') || '{}')));
+    } catch {
+      return new Map();
+    }
+  });
 
+  const [noiseSuppression, setNoiseSuppression] = useState(() => readBool('concord_noise_suppression'));
+  const [echoCancellation, setEchoCancellation] = useState(() => readBool('concord_echo_cancellation'));
+  const [autoGainControl, setAutoGainControl] = useState(() => readBool('concord_auto_gain'));
+  const [noiseGateEnabled, setNoiseGateEnabled] = useState(() => readBool('concord_noise_gate'));
+  const [automaticSensitivity, setAutomaticSensitivity] = useState(() => readBool('concord_auto_sensitivity'));
+  const [noiseGateThreshold, setNoiseGateThreshold] = useState(() => parseInt(localStorage.getItem('concord_sensitivity_threshold') || '18', 10));
+
+  // Refs mirror state for use inside audio callbacks / async signaling.
+  const localStreamRef = useRef(null);
+  const peersRef = useRef(new Map()); // userId -> RTCPeerConnection
+  const iceQueuesRef = useRef(new Map());
+  const remoteNodesRef = useRef(new Map()); // userId -> { audioEl, source, gain, analyser }
+  const outputCtxRef = useRef(null);
+  const inputCtxRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const hangoverRef = useRef({ timer: null, open: false });
+  const activeRef = useRef(null);
+  const leavingRef = useRef(false);
+  const seenSelfRef = useRef(false);
+  const lastStatsRef = useRef(new Map());
+  const flags = useRef({});
+  flags.current = {
+    isMuted,
+    isDeafened,
+    noiseGateEnabled,
+    automaticSensitivity,
+    noiseGateThreshold,
+    voiceMode: settings.voiceMode,
+    isPttPressed,
+    userVolumes
+  };
+  activeRef.current = activeVoiceChannel;
+
+  const voiceServerId = activeVoiceChannel?.serverId || null;
+  const voiceServer = useMemo(() => servers.find((s) => s.id === voiceServerId) || null, [servers, voiceServerId]);
+  const isServerMuted = Boolean(userId && voiceServer?.mutedIds?.includes(userId));
+  flags.current.isServerMuted = isServerMuted;
+
+  // ---------------------------------------------------------------------------
+  // Devices
+  // ---------------------------------------------------------------------------
+
+  const refreshAudioDevices = useCallback(async (requestPermission = false) => {
+    if (!navigator.mediaDevices?.enumerateDevices) return { inputs: [], outputs: [] };
+    try {
       if (requestPermission) {
-        try {
-          const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          tempStream.getTracks().forEach((track) => track.stop());
-        } catch (permErr) {}
+        const temp = await navigator.mediaDevices.getUserMedia({ audio: true });
+        temp.getTracks().forEach((t) => t.stop());
       }
-
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputs = devices.filter((d) => d.kind === 'audioinput' && d.deviceId);
-      const outputs = devices.filter((d) => d.kind === 'audiooutput' && d.deviceId);
-
-      const formattedInputs = inputs.map((d, index) => ({
+      const inputs = devices.filter((d) => d.kind === 'audioinput' && d.deviceId).map((d, i) => ({
         deviceId: d.deviceId,
-        label: d.label || (index === 0 ? 'Microfone Padrão do Sistema' : `Microfone ${index + 1}`),
+        label: d.label || (i === 0 ? 'Microfone Padrão do Sistema' : `Microfone ${i + 1}`),
         groupId: d.groupId
       }));
-
-      const formattedOutputs = outputs.map((d, index) => ({
+      const outputs = devices.filter((d) => d.kind === 'audiooutput' && d.deviceId).map((d, i) => ({
         deviceId: d.deviceId,
-        label: d.label || (index === 0 ? 'Alto-falante / Fone Padrão' : `Saída de Áudio ${index + 1}`),
+        label: d.label || (i === 0 ? 'Alto-falante / Fone Padrão' : `Saída de Áudio ${i + 1}`),
         groupId: d.groupId
       }));
-
-      setInputDevices(formattedInputs);
-      setOutputDevices(formattedOutputs);
-
-      if (formattedInputs.length > 0 && (!selectedInputDevice || !formattedInputs.some(d => d.deviceId === selectedInputDevice))) {
-        setSelectedInputDevice(formattedInputs[0].deviceId);
-      }
-      if (formattedOutputs.length > 0 && (!selectedOutputDevice || !formattedOutputs.some(d => d.deviceId === selectedOutputDevice))) {
-        setSelectedOutputDevice(formattedOutputs[0].deviceId);
-      }
-
-      return { inputs: formattedInputs, outputs: formattedOutputs };
+      setInputDevices(inputs);
+      setOutputDevices(outputs);
+      return { inputs, outputs };
     } catch (err) {
+      logWarn('enumerate devices', err);
       return { inputs: [], outputs: [] };
     }
-  }, [selectedInputDevice, selectedOutputDevice]);
+  }, []);
 
   useEffect(() => {
     refreshAudioDevices();
-    if (navigator.mediaDevices?.addEventListener) {
-      navigator.mediaDevices.addEventListener('devicechange', () => refreshAudioDevices(false));
-      return () => {
-        navigator.mediaDevices.removeEventListener('devicechange', () => refreshAudioDevices(false));
-      };
-    }
+    const onChange = () => refreshAudioDevices(false);
+    navigator.mediaDevices?.addEventListener?.('devicechange', onChange);
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', onChange);
   }, [refreshAudioDevices]);
 
-  const [noiseSuppression, setNoiseSuppression] = useState(() => localStorage.getItem('concord_noise_suppression') !== 'false');
-  const [echoCancellation, setEchoCancellation] = useState(() => localStorage.getItem('concord_echo_cancellation') !== 'false');
-  const [autoGainControl, setAutoGainControl] = useState(() => localStorage.getItem('concord_auto_gain') !== 'false');
-  const [noiseGateEnabled, setNoiseGateEnabled] = useState(() => localStorage.getItem('concord_noise_gate') !== 'false');
-  const [automaticSensitivity, setAutomaticSensitivity] = useState(() => localStorage.getItem('concord_auto_sensitivity') !== 'false');
-  const [noiseGateThreshold, setNoiseGateThreshold] = useState(() => {
-    const saved = localStorage.getItem('concord_sensitivity_threshold');
-    return saved ? parseInt(saved, 10) : 18;
-  });
+  useEffect(() => {
+    localStorage.setItem('concord_input_device', selectedInputDevice || '');
+  }, [selectedInputDevice]);
 
-  const noiseSuppressionRef = useRef(noiseSuppression);
-  const echoCancellationRef = useRef(echoCancellation);
-  const autoGainControlRef = useRef(autoGainControl);
-  const noiseGateEnabledRef = useRef(noiseGateEnabled);
-  const automaticSensitivityRef = useRef(automaticSensitivity);
-  const noiseGateThresholdRef = useRef(noiseGateThreshold);
-  const speechHangoverRef = useRef({ timer: null, isOpen: false });
+  useEffect(() => {
+    localStorage.setItem('concord_output_device', selectedOutputDevice || '');
+    const ctx = outputCtxRef.current;
+    if (ctx?.setSinkId) {
+      ctx.setSinkId(selectedOutputDevice || '').catch((err) => logWarn('output device', err));
+    }
+  }, [selectedOutputDevice]);
 
-  useEffect(() => { noiseSuppressionRef.current = noiseSuppression; }, [noiseSuppression]);
-  useEffect(() => { echoCancellationRef.current = echoCancellation; }, [echoCancellation]);
-  useEffect(() => { autoGainControlRef.current = autoGainControl; }, [autoGainControl]);
-  useEffect(() => { noiseGateEnabledRef.current = noiseGateEnabled; }, [noiseGateEnabled]);
-  useEffect(() => { automaticSensitivityRef.current = automaticSensitivity; }, [automaticSensitivity]);
-  useEffect(() => { noiseGateThresholdRef.current = noiseGateThreshold; }, [noiseGateThreshold]);
+  // ---------------------------------------------------------------------------
+  // Local microphone: noise gate, push-to-talk and speaking detection
+  // ---------------------------------------------------------------------------
 
-  const updateNoiseSuppression = (val) => {
-    setNoiseSuppression(val);
-    localStorage.setItem('concord_noise_suppression', String(val));
-    if (activeVoiceChannel) ensureLocalStream(true);
-  };
-  const updateEchoCancellation = (val) => {
-    setEchoCancellation(val);
-    localStorage.setItem('concord_echo_cancellation', String(val));
-    if (activeVoiceChannel) ensureLocalStream(true);
-  };
-  const updateAutoGainControl = (val) => {
-    setAutoGainControl(val);
-    localStorage.setItem('concord_auto_gain', String(val));
-    if (activeVoiceChannel) ensureLocalStream(true);
-  };
-  const updateNoiseGateEnabled = (val) => {
-    setNoiseGateEnabled(val);
-    localStorage.setItem('concord_noise_gate', String(val));
-  };
-  const updateAutomaticSensitivity = (val) => {
-    setAutomaticSensitivity(val);
-    localStorage.setItem('concord_auto_sensitivity', String(val));
-  };
-  const updateNoiseGateThreshold = (val) => {
-    setNoiseGateThreshold(val);
-    localStorage.setItem('concord_sensitivity_threshold', String(val));
+  const shouldTransmit = (speakingNow) => {
+    const f = flags.current;
+    if (f.isMuted || f.isDeafened || f.isServerMuted) return false;
+    if (f.voiceMode === 'ptt') return f.isPttPressed;
+    return f.noiseGateEnabled ? speakingNow : true;
   };
 
-  // Audio Analyzer for Speaking Indicator with Noise Gate and High-pass Filter
-  const startSpeakingDetector = (stream) => {
-    try {
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {});
-        audioContextRef.current = null;
-      }
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-
-      const audioCtx = new AudioCtx();
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.3;
-
-      // Studio-grade highpass filter to cut fan rumble, AC noise, and table bumps below 85Hz
-      const filter = audioCtx.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.setValueAtTime(85, audioCtx.currentTime);
-
-      const source = audioCtx.createMediaStreamSource(stream);
-      source.connect(filter);
-      filter.connect(analyser);
-
-      audioContextRef.current = audioCtx;
-      analyserRef.current = analyser;
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      const checkVolume = () => {
-        if (!analyserRef.current) return;
-
-        // If user is muted, force volume to 0 and speaking to false immediately
-        if (isMutedRef.current) {
-          setMicVolumeLevel(0);
-          speechHangoverRef.current.isOpen = false;
-          setIsSpeaking((prev) => {
-            if (prev) {
-              if (socket && activeVoiceChannel) {
-                socket.emit(SOCKET_EVENTS.VOICE_SPEAKING_STATE, {
-                  channelId: activeVoiceChannel.id,
-                  isSpeaking: false
-                });
-              }
-              if (user?.id) {
-                setVoiceUsers((currentUsers) =>
-                  currentUsers.map((u) => (u.userId === user.id ? { ...u, isSpeaking: false } : u))
-                );
-              }
-            }
-            return false;
-          });
-          animFrameRef.current = requestAnimationFrame(checkVolume);
-          return;
-        }
-
-        analyserRef.current.getByteFrequencyData(dataArray);
-
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          sum += dataArray[i];
-        }
-        const average = sum / dataArray.length;
-        const normalized = Math.min(100, Math.round((average / 128) * 100));
-        setMicVolumeLevel(normalized);
-
-        // Effective threshold based on Noise Gate and Sensitivity settings
-        const effectiveThreshold = automaticSensitivityRef.current ? 14 : noiseGateThresholdRef.current;
-        const isAboveThreshold = normalized >= effectiveThreshold;
-
-        // Smart Noise Gate with natural 220ms release hangover (cuts background noise while preserving natural sentence endings)
-        if (isAboveThreshold) {
-          speechHangoverRef.current.isOpen = true;
-          if (speechHangoverRef.current.timer) {
-            clearTimeout(speechHangoverRef.current.timer);
-            speechHangoverRef.current.timer = null;
-          }
-        } else if (speechHangoverRef.current.isOpen && !speechHangoverRef.current.timer) {
-          speechHangoverRef.current.timer = setTimeout(() => {
-            speechHangoverRef.current.isOpen = false;
-            speechHangoverRef.current.timer = null;
-          }, 220);
-        }
-
-        const speakingNow = !isMutedRef.current && speechHangoverRef.current.isOpen;
-
-        // If Noise Gate is enabled, gate the transmitted track so keyboard/fans/background clicks don't leak
-        if (noiseGateEnabledRef.current && localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach((track) => {
-            track.enabled = !isMutedRef.current && (speakingNow || !noiseGateEnabledRef.current);
-          });
-        }
-
-        setIsSpeaking((prev) => {
-          if (prev !== speakingNow) {
-            if (socket && activeVoiceChannel) {
-              socket.emit(SOCKET_EVENTS.VOICE_SPEAKING_STATE, {
-                channelId: activeVoiceChannel.id,
-                isSpeaking: speakingNow
-              });
-            }
-            if (user?.id) {
-              setVoiceUsers((currentUsers) =>
-                currentUsers.map((u) => (u.userId === user.id ? { ...u, isSpeaking: speakingNow } : u))
-              );
-            }
-          }
-          return speakingNow;
-        });
-
-        animFrameRef.current = requestAnimationFrame(checkVolume);
-      };
-
-      checkVolume();
-    } catch (err) {}
+  const applyTransmitState = (speakingNow) => {
+    const transmit = shouldTransmit(speakingNow);
+    localStreamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = transmit;
+    });
+    return transmit;
   };
 
   const stopSpeakingDetector = () => {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    analyserRef.current = null;
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    animFrameRef.current = null;
+    inputCtxRef.current?.close().catch(() => {});
+    inputCtxRef.current = null;
     setIsSpeaking(false);
     setMicVolumeLevel(0);
   };
 
-  // Ensure local mic stream is active and attached to all peer connections
-  const ensureLocalStream = async (force = false) => {
-    if (!force && localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0 && localStreamRef.current.getAudioTracks()[0].readyState === 'live') {
-      localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !isMutedRef.current; });
-      return localStreamRef.current;
-    }
+  const startSpeakingDetector = (stream) => {
+    stopSpeakingDetector();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.3;
+    // High-pass at 85 Hz cuts fan rumble and desk bumps before level detection.
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(85, ctx.currentTime);
+    ctx.createMediaStreamSource(stream).connect(filter);
+    filter.connect(analyser);
+    inputCtxRef.current = ctx;
 
-    if (localStreamRef.current) {
-      try {
-        localStreamRef.current.getTracks().forEach((t) => t.stop());
-      } catch (e) {}
-      localStreamRef.current = null;
-    }
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const loop = () => {
+      const f = flags.current;
+      analyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i];
+      const level = f.isMuted ? 0 : Math.min(100, Math.round((sum / data.length / 128) * 100));
+      setMicVolumeLevel(level);
+
+      const threshold = f.automaticSensitivity ? SPEAKING_THRESHOLD : f.noiseGateThreshold;
+      if (level >= threshold) {
+        hangoverRef.current.open = true;
+        clearTimeout(hangoverRef.current.timer);
+        hangoverRef.current.timer = null;
+      } else if (hangoverRef.current.open && !hangoverRef.current.timer) {
+        // 220 ms release keeps sentence endings from being clipped.
+        hangoverRef.current.timer = setTimeout(() => {
+          hangoverRef.current.open = false;
+          hangoverRef.current.timer = null;
+        }, 220);
+      }
+
+      const transmitting = applyTransmitState(hangoverRef.current.open);
+      const speakingNow = transmitting && (f.voiceMode === 'ptt' ? level >= SPEAKING_THRESHOLD || hangoverRef.current.open : hangoverRef.current.open);
+      setIsSpeaking((prev) => (prev === speakingNow ? prev : speakingNow));
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
+    loop();
+  };
+
+  const ensureLocalStream = async (force = false) => {
+    const existing = localStreamRef.current;
+    if (!force && existing?.getAudioTracks()[0]?.readyState === 'live') return existing;
+    existing?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
 
     try {
-      const audioConstraints = {
-        deviceId: selectedInputDevice ? { ideal: selectedInputDevice } : undefined,
-        echoCancellation: Boolean(echoCancellationRef.current),
-        noiseSuppression: Boolean(noiseSuppressionRef.current),
-        autoGainControl: Boolean(autoGainControlRef.current),
-        channelCount: 1,
-        sampleRate: 48000
-      };
-
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints,
+        audio: {
+          deviceId: selectedInputDevice ? { ideal: selectedInputDevice } : undefined,
+          echoCancellation,
+          noiseSuppression,
+          autoGainControl,
+          channelCount: 1,
+          sampleRate: 48000
+        },
         video: false
       });
-
       localStreamRef.current = stream;
-
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !isMutedRef.current;
-      });
-
+      applyTransmitState(false);
       startSpeakingDetector(stream);
 
-      // Attach audio tracks to any existing peer connections
-      peerConnectionsRef.current.forEach((pc) => {
-        const senders = pc.getSenders();
-        stream.getAudioTracks().forEach((track) => {
-          const sender = senders.find((s) => s.track && s.track.kind === 'audio');
-          if (sender) {
-            sender.replaceTrack(track).catch(() => {});
-          } else {
-            try {
-              pc.addTrack(track, stream);
-            } catch (e) {}
-          }
-        });
+      const track = stream.getAudioTracks()[0];
+      peersRef.current.forEach((pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
+        if (sender) sender.replaceTrack(track).catch((err) => logWarn('replace track', err));
+        else pc.addTrack(track, stream);
       });
-
       return stream;
     } catch (err) {
-      console.warn('Microphone capture error:', err);
+      logWarn('microphone', err);
+      showError('Microfone indisponível', 'Não foi possível acessar o microfone. Verifique as permissões do sistema.');
       return null;
     }
   };
 
-  // Helper to drain queued ICE candidates once remote description is set
-  const drainIceCandidates = async (targetUserId, pc) => {
-    const queue = iceCandidateQueuesRef.current.get(targetUserId) || [];
-    iceCandidateQueuesRef.current.delete(targetUserId);
-    for (const candidateData of queue) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(candidateData));
-      } catch (e) {
-        console.warn('Error applying queued ICE candidate:', e);
-      }
-    }
+  // Re-capture the mic when processing options or the input device change.
+  const restartMicIfActive = () => {
+    if (activeRef.current) ensureLocalStream(true);
   };
 
-  // Helper to create Peer Connection for a remote user
-  const createPeerConnection = (targetUserId, channelId) => {
-    if (peerConnectionsRef.current.has(targetUserId)) {
-      return peerConnectionsRef.current.get(targetUserId);
+  const persistToggle = (setter, key) => (val) => {
+    setter(val);
+    localStorage.setItem(key, String(val));
+  };
+  const updateNoiseGateEnabled = persistToggle(setNoiseGateEnabled, 'concord_noise_gate');
+  const updateAutomaticSensitivity = persistToggle(setAutomaticSensitivity, 'concord_auto_sensitivity');
+  const updateNoiseGateThreshold = persistToggle(setNoiseGateThreshold, 'concord_sensitivity_threshold');
+  const updateNoiseSuppression = (val) => { persistToggle(setNoiseSuppression, 'concord_noise_suppression')(val); };
+  const updateEchoCancellation = (val) => { persistToggle(setEchoCancellation, 'concord_echo_cancellation')(val); };
+  const updateAutoGainControl = (val) => { persistToggle(setAutoGainControl, 'concord_auto_gain')(val); };
+
+  useEffect(() => {
+    restartMicIfActive();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noiseSuppression, echoCancellation, autoGainControl, selectedInputDevice]);
+
+  // ---------------------------------------------------------------------------
+  // Remote audio: Web Audio graph per peer (volume up to 200%, speaking detection)
+  // ---------------------------------------------------------------------------
+
+  const getOutputCtx = () => {
+    if (!outputCtxRef.current) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      outputCtxRef.current = new AudioCtx();
+      if (selectedOutputDevice && outputCtxRef.current.setSinkId) {
+        outputCtxRef.current.setSinkId(selectedOutputDevice).catch((err) => logWarn('output device', err));
+      }
     }
+    if (outputCtxRef.current.state === 'suspended') outputCtxRef.current.resume().catch(() => {});
+    return outputCtxRef.current;
+  };
 
-    const pc = new RTCPeerConnection({
-      iceServers: iceServersRef.current,
-      iceCandidatePoolSize: 10
-    });
+  const volumeFor = (id) => {
+    const v = flags.current.userVolumes.get(id);
+    return v === undefined ? 1 : Number(v);
+  };
 
-    // Add local audio tracks if available
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => {
-        try {
-          pc.addTrack(track, localStreamRef.current);
-        } catch (e) {}
+  const attachRemoteStream = (remoteUserId, stream) => {
+    const existing = remoteNodesRef.current.get(remoteUserId);
+    if (existing?.stream === stream) return;
+    detachRemote(remoteUserId);
+
+    // Chromium only feeds remote WebRTC audio into Web Audio when the stream
+    // is also attached to a media element, so keep a muted one around.
+    const audioEl = document.createElement('audio');
+    audioEl.muted = true;
+    audioEl.autoplay = true;
+    audioEl.srcObject = stream;
+    audioEl.play().catch(() => {});
+
+    const ctx = getOutputCtx();
+    const source = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    gain.gain.value = flags.current.isDeafened ? 0 : volumeFor(remoteUserId);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    source.connect(analyser);
+    remoteNodesRef.current.set(remoteUserId, { stream, audioEl, source, gain, analyser });
+  };
+
+  function detachRemote(remoteUserId) {
+    const nodes = remoteNodesRef.current.get(remoteUserId);
+    if (!nodes) return;
+    try {
+      nodes.source.disconnect();
+      nodes.gain.disconnect();
+    } catch (err) {
+      logWarn('detach audio', err);
+    }
+    nodes.audioEl.srcObject = null;
+    remoteNodesRef.current.delete(remoteUserId);
+  }
+
+  // Poll remote analysers to light up whoever is talking.
+  useEffect(() => {
+    if (!activeVoiceChannel) {
+      setRemoteSpeaking(new Set());
+      return undefined;
+    }
+    const data = new Uint8Array(128);
+    const timer = setInterval(() => {
+      const speaking = new Set();
+      remoteNodesRef.current.forEach((nodes, id) => {
+        nodes.analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        if ((sum / data.length / 128) * 100 >= SPEAKING_THRESHOLD) speaking.add(id);
       });
-    }
+      setRemoteSpeaking((prev) => {
+        if (prev.size === speaking.size && [...speaking].every((id) => prev.has(id))) return prev;
+        return speaking;
+      });
+    }, 150);
+    return () => clearInterval(timer);
+  }, [activeVoiceChannel]);
 
-    // ICE Candidates
+  // ---------------------------------------------------------------------------
+  // Peer connections (mesh)
+  // ---------------------------------------------------------------------------
+
+  const closePeer = (remoteUserId) => {
+    peersRef.current.get(remoteUserId)?.close();
+    peersRef.current.delete(remoteUserId);
+    iceQueuesRef.current.delete(remoteUserId);
+    lastStatsRef.current.delete(remoteUserId);
+    detachRemote(remoteUserId);
+  };
+
+  const createPeer = (remoteUserId, channelId) => {
+    if (peersRef.current.has(remoteUserId)) return peersRef.current.get(remoteUserId);
+    const pc = new RTCPeerConnection({ iceServers: getIceServers(), iceCandidatePoolSize: 4 });
+    const stream = localStreamRef.current;
+    stream?.getAudioTracks().forEach((track) => pc.addTrack(track, stream));
+
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        const candidatePayload = {
-          candidate: event.candidate.candidate,
-          sdpMid: event.candidate.sdpMid,
-          sdpMLineIndex: event.candidate.sdpMLineIndex,
-          usernameFragment: event.candidate.usernameFragment
-        };
-
-        if (socket && socket.connected) {
-          socket.emit(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, {
-            targetUserId,
-            channelId,
-            candidate: candidatePayload
-          });
-        }
-        if (user?.id) {
-          sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'candidate', candidatePayload);
-        }
-      }
+      if (!event.candidate) return;
+      quietly('send candidate', sendVoiceSignal(channelId, userId, remoteUserId, 'candidate', event.candidate.toJSON()));
     };
-
-    // Receive Remote Audio Track
     pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      const track = event.track;
-      const streamToPlay = remoteStream || new MediaStream([track]);
-
-      let audioEl = remoteAudiosRef.current.get(targetUserId);
-      if (!audioEl) {
-        audioEl = document.createElement('audio');
-        audioEl.id = `remote-audio-${targetUserId}`;
-        audioEl.autoplay = true;
-        audioEl.playsInline = true;
-        audioEl.style.display = 'none';
-        document.body.appendChild(audioEl);
-        remoteAudiosRef.current.set(targetUserId, audioEl);
-      }
-
-      if (audioEl.srcObject !== streamToPlay) {
-        audioEl.srcObject = streamToPlay;
-      }
-
-      const isDeaf = isDeafenedRef.current;
-      const volume = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
-      audioEl.muted = isDeaf || volume === 0;
-      audioEl.volume = isDeaf ? 0 : volume;
-
-      const playPromise = audioEl.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn(`Remote audio autoplay pending interaction for user ${targetUserId}:`, err);
-          const resumeAudio = () => {
-            audioEl.play().catch(() => {});
-            window.removeEventListener('click', resumeAudio);
-            window.removeEventListener('keydown', resumeAudio);
-          };
-          window.addEventListener('click', resumeAudio, { once: true });
-          window.addEventListener('keydown', resumeAudio, { once: true });
-        });
+      attachRemoteStream(remoteUserId, event.streams[0] || new MediaStream([event.track]));
+    };
+    pc.onconnectionstatechange = () => {
+      // The initiator retries a failed connection once things settle.
+      if (pc.connectionState === 'failed' && String(userId) < String(remoteUserId) && activeRef.current?.id === channelId) {
+        closePeer(remoteUserId);
+        setTimeout(() => initiateOffer(remoteUserId, channelId), 1500);
       }
     };
-
-    peerConnectionsRef.current.set(targetUserId, pc);
+    peersRef.current.set(remoteUserId, pc);
     return pc;
   };
 
-  // Helper to send Offer to a remote user (deterministic initiator: String(user.id) < String(targetUserId))
-  const initiateVoiceOffer = async (targetUserId, channelId) => {
-    if (!targetUserId || String(targetUserId) === String(user?.id) || !channelId) return;
+  const drainIce = async (remoteUserId, pc) => {
+    const queue = iceQueuesRef.current.get(remoteUserId) || [];
+    iceQueuesRef.current.delete(remoteUserId);
+    for (const c of queue) {
+      await pc.addIceCandidate(new RTCIceCandidate(c)).catch((err) => logWarn('queued ice', err));
+    }
+  };
+
+  async function initiateOffer(remoteUserId, channelId) {
+    if (!remoteUserId || remoteUserId === userId || peersRef.current.has(remoteUserId)) return;
     try {
-      const stream = await ensureLocalStream();
-      const pc = createPeerConnection(targetUserId, channelId);
-
-      if (stream) {
-        const senders = pc.getSenders();
-        stream.getAudioTracks().forEach((track) => {
-          if (!senders.some((s) => s.track === track)) {
-            try { pc.addTrack(track, stream); } catch (e) {}
-          }
-        });
-      }
-
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: false
-      });
+      await ensureLocalStream();
+      const pc = createPeer(remoteUserId, channelId);
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
-
-      const offerPayload = {
-        type: offer.type,
-        sdp: offer.sdp
-      };
-
-      if (socket && socket.connected) {
-        socket.emit(SOCKET_EVENTS.VOICE_OFFER, {
-          targetUserId,
-          channelId,
-          offer: offerPayload
-        });
-      }
-      if (user?.id) {
-        sendVoiceSignalInCloud(channelId, user.id, targetUserId, 'offer', offerPayload);
-      }
+      await sendVoiceSignal(channelId, userId, remoteUserId, 'offer', { type: offer.type, sdp: offer.sdp });
     } catch (err) {
-      console.warn(`Failed to create voice offer for ${targetUserId}:`, err);
+      logWarn('voice offer', err);
     }
-  };
+  }
 
-  // Helper to handle incoming Offer
-  const handleIncomingVoiceOffer = async (senderUserId, channelId, offer) => {
-    if (!senderUserId || String(senderUserId) === String(user?.id) || !channelId || !offer) return;
+  const handleSignal = async (sig) => {
+    const active = activeRef.current;
+    if (!active || sig.channelId !== active.id || sig.senderId === userId) return;
+    const from = sig.senderId;
     try {
-      const stream = await ensureLocalStream();
-      const pc = createPeerConnection(senderUserId, channelId);
-
-      if (stream) {
-        const senders = pc.getSenders();
-        stream.getAudioTracks().forEach((track) => {
-          if (!senders.some((s) => s.track === track)) {
-            try { pc.addTrack(track, stream); } catch (e) {}
-          }
-        });
-      }
-
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      await drainIceCandidates(senderUserId, pc);
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      const answerPayload = {
-        type: answer.type,
-        sdp: answer.sdp
-      };
-
-      if (socket && socket.connected) {
-        socket.emit(SOCKET_EVENTS.VOICE_ANSWER, {
-          targetUserId: senderUserId,
-          channelId,
-          answer: answerPayload
-        });
-      }
-      if (user?.id) {
-        sendVoiceSignalInCloud(channelId, user.id, senderUserId, 'answer', answerPayload);
-      }
-    } catch (err) {
-      console.warn('Error handling incoming voice offer:', err);
-    }
-  };
-
-  // Helper to handle incoming Answer
-  const handleIncomingVoiceAnswer = async (senderUserId, answer) => {
-    if (!senderUserId || !answer) return;
-    try {
-      const pc = peerConnectionsRef.current.get(senderUserId);
-      if (pc && pc.signalingState !== 'stable') {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        await drainIceCandidates(senderUserId, pc);
-      }
-    } catch (err) {
-      console.warn('Error handling voice answer:', err);
-    }
-  };
-
-  // Helper to handle incoming ICE candidate
-  const handleIncomingVoiceCandidate = async (senderUserId, candidate) => {
-    if (!senderUserId || !candidate) return;
-    try {
-      const pc = peerConnectionsRef.current.get(senderUserId);
-
-      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate));
-      } else {
-        // Queue candidate until setRemoteDescription completes
-        if (!iceCandidateQueuesRef.current.has(senderUserId)) {
-          iceCandidateQueuesRef.current.set(senderUserId, []);
+      if (sig.type === 'offer') {
+        // An offer always comes from a fresh connection on the other side,
+        // so it replaces whatever we had with this peer.
+        closePeer(from);
+        await ensureLocalStream();
+        const pc = createPeer(from, active.id);
+        await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+        await drainIce(from, pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendVoiceSignal(active.id, userId, from, 'answer', { type: answer.type, sdp: answer.sdp });
+      } else if (sig.type === 'answer') {
+        const pc = peersRef.current.get(from);
+        if (pc && pc.signalingState === 'have-local-offer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(sig.data));
+          await drainIce(from, pc);
         }
-        iceCandidateQueuesRef.current.get(senderUserId).push(candidate);
+      } else if (sig.type === 'candidate') {
+        const pc = peersRef.current.get(from);
+        if (pc?.remoteDescription?.type) {
+          await pc.addIceCandidate(new RTCIceCandidate(sig.data));
+        } else {
+          if (!iceQueuesRef.current.has(from)) iceQueuesRef.current.set(from, []);
+          iceQueuesRef.current.get(from).push(sig.data);
+        }
       }
     } catch (err) {
-      console.warn('Error adding voice ICE candidate:', err);
+      logWarn(`voice signal ${sig.type}`, err);
     }
   };
+  const handleSignalRef = useRef(handleSignal);
+  handleSignalRef.current = handleSignal;
 
-  // Join Voice Channel
-  const joinVoice = async (channel) => {
-    if (!channel) return;
-    if (activeVoiceChannel?.id === channel.id) return;
+  useEffect(() => {
+    if (!activeVoiceChannel?.id || !userId) return undefined;
+    return listenToVoiceSignals(userId, (sig) => handleSignalRef.current(sig));
+  }, [activeVoiceChannel?.id, userId]);
 
-    if (activeVoiceChannel) {
-      leaveVoice();
+  // ---------------------------------------------------------------------------
+  // Voice presence for the visible server and the server I'm connected to
+  // ---------------------------------------------------------------------------
+
+  const watchedServers = useMemo(
+    () => Array.from(new Set([activeServer?.id, voiceServerId].filter(Boolean))).sort().join(','),
+    [activeServer?.id, voiceServerId]
+  );
+
+  useEffect(() => {
+    if (!watchedServers || !userId) {
+      setVoiceByServer(new Map());
+      return undefined;
+    }
+    const unsubs = watchedServers.split(',').map((serverId) =>
+      listenToServerVoice(serverId, (byChannel) => {
+        setVoiceByServer((prev) => {
+          const next = new Map(prev);
+          next.set(serverId, byChannel);
+          return next;
+        });
+      })
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [watchedServers, userId]);
+
+  const currentParticipants = useMemo(() => {
+    if (!activeVoiceChannel) return [];
+    return (voiceByServer.get(activeVoiceChannel.serverId)?.get(activeVoiceChannel.id) || []).map(toParticipant);
+  }, [voiceByServer, activeVoiceChannel]);
+
+  // Connect to newcomers, drop peers who left, and notice if I was disconnected.
+  const participantKey = currentParticipants.map((p) => p.userId).sort().join(',');
+  useEffect(() => {
+    const active = activeRef.current;
+    if (!active || !userId) return;
+    const ids = participantKey ? participantKey.split(',') : [];
+
+    if (ids.includes(userId)) {
+      seenSelfRef.current = true;
+    } else if (seenSelfRef.current && !leavingRef.current) {
+      seenSelfRef.current = false;
+      teardown();
+      showToast('Você foi desconectado do canal de voz.', 'warning');
+      return;
     }
 
-    // Always acquire microphone stream
-    await ensureLocalStream();
-
-    const participantInfo = {
-      userId: user?.id || 'user-' + Date.now(),
-      username: user?.username || 'Usuário',
-      avatar: user?.avatar || '',
-      isMuted: isMuted,
-      isDeafened: isDeafened,
-      isSpeaking: false,
-      isScreenSharing: false,
-      socketId: socket?.id || 'cloud'
-    };
-
-    const allVoiceIds = (activeServer?.channels || [])
-      .filter((c) => c.type === 'voice')
-      .map((c) => c.id);
-
-    setActiveVoiceChannel(channel);
-    setVoiceUsers([participantInfo]);
-
-    if (socket && socket.connected) {
-      socket.emit(SOCKET_EVENTS.VOICE_JOIN, { channelId: channel.id });
-    }
-
-    await switchVoiceRoomInCloud(channel.id, participantInfo, allVoiceIds);
-  };
-
-  // Leave Voice Channel
-  const leaveVoice = useCallback(() => {
-    if (socket && socket.connected && activeVoiceChannel) {
-      socket.emit(SOCKET_EVENTS.VOICE_LEAVE, { channelId: activeVoiceChannel.id });
-    }
-
-    if (activeVoiceChannel) {
-      leaveVoiceInCloud(activeVoiceChannel.id, user?.id, user?.username);
-    }
-
-    stopSpeakingDetector();
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-    }
-
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-    iceCandidateQueuesRef.current.clear();
-
-    remoteAudiosRef.current.forEach((audioEl) => {
-      audioEl.srcObject = null;
-      audioEl.remove();
+    ids.forEach((id) => {
+      if (id !== userId && String(userId) < String(id) && !peersRef.current.has(id)) initiateOffer(id, active.id);
     });
-    remoteAudiosRef.current.clear();
+    Array.from(peersRef.current.keys()).forEach((id) => {
+      if (!ids.includes(id)) closePeer(id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantKey, userId]);
 
-    if (localCameraStream) {
-      localCameraStream.getTracks().forEach((track) => track.stop());
-      setLocalCameraStream(null);
-      setIsCameraOn(false);
+  // Heartbeat so a crashed client disappears from the room.
+  useEffect(() => {
+    if (!activeVoiceChannel?.id || !userId) return undefined;
+    const timer = setInterval(() => quietly('voice heartbeat', updateVoicePresence(userId, {})), VOICE_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [activeVoiceChannel?.id, userId]);
+
+  // ---------------------------------------------------------------------------
+  // Connection quality
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!activeVoiceChannel) {
+      setConnectionStats(new Map());
+      return undefined;
+    }
+    const timer = setInterval(async () => {
+      const next = new Map();
+      for (const [id, pc] of peersRef.current) {
+        try {
+          const report = await pc.getStats();
+          let rtt = null;
+          let lost = 0;
+          let received = 0;
+          report.forEach((s) => {
+            if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime !== undefined) {
+              rtt = Math.round(s.currentRoundTripTime * 1000);
+            }
+            if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+              lost += s.packetsLost || 0;
+              received += s.packetsReceived || 0;
+            }
+          });
+          const prev = lastStatsRef.current.get(id) || { lost: 0, received: 0 };
+          const dLost = Math.max(0, lost - prev.lost);
+          const dReceived = Math.max(0, received - prev.received);
+          lastStatsRef.current.set(id, { lost, received });
+          const loss = dLost + dReceived > 0 ? Math.round((dLost / (dLost + dReceived)) * 1000) / 10 : 0;
+          next.set(id, { rtt, loss, state: pc.connectionState });
+        } catch (err) {
+          logWarn('voice stats', err);
+        }
+      }
+      setConnectionStats(next);
+    }, STATS_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [activeVoiceChannel]);
+
+  const connectionQuality = useMemo(() => {
+    if (!activeVoiceChannel) return 'unknown';
+    if (connectionStats.size === 0) return currentParticipants.length > 1 ? 'connecting' : 'good';
+    const order = ['good', 'ok', 'bad'];
+    let worst = 'good';
+    connectionStats.forEach((s) => {
+      const q = s.state === 'connected' ? qualityFrom(s) : 'bad';
+      if (order.indexOf(q) > order.indexOf(worst)) worst = q;
+    });
+    return worst;
+  }, [connectionStats, activeVoiceChannel, currentParticipants.length]);
+
+  const averagePing = useMemo(() => {
+    const values = Array.from(connectionStats.values()).map((s) => s.rtt).filter((v) => v !== null);
+    return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
+  }, [connectionStats]);
+
+  // ---------------------------------------------------------------------------
+  // Join / leave
+  // ---------------------------------------------------------------------------
+
+  function teardown() {
+    stopSpeakingDetector();
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    Array.from(peersRef.current.keys()).forEach(closePeer);
+    outputCtxRef.current?.close().catch(() => {});
+    outputCtxRef.current = null;
+    localCameraStream?.getTracks().forEach((t) => t.stop());
+    setLocalCameraStream(null);
+    setIsCameraOn(false);
+    seenSelfRef.current = false;
+    setActiveVoiceChannel(null);
+  }
+
+  const leaveVoice = useCallback(() => {
+    if (!activeRef.current) return;
+    leavingRef.current = true;
+    quietly('leave voice', leaveVoicePresence(userId));
+    teardown();
+    setTimeout(() => {
+      leavingRef.current = false;
+    }, 1000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const joinVoice = async (channel) => {
+    if (!channel || !user) return;
+    const serverId = channel.serverId || activeServer?.id;
+    if (!serverId) return;
+    if (activeRef.current?.id === channel.id) return;
+    if (activeRef.current) {
+      Array.from(peersRef.current.keys()).forEach(closePeer);
+      seenSelfRef.current = false;
     }
 
-    setActiveVoiceChannel(null);
-    setVoiceUsers([]);
-  }, [socket, activeVoiceChannel, user?.id, user?.username, localCameraStream]);
+    const stream = await ensureLocalStream();
+    if (!stream) return;
+    getOutputCtx();
 
-  // Toggle Camera / Webcam
+    const target = { ...channel, serverId };
+    activeRef.current = target;
+    setActiveVoiceChannel(target);
+    leavingRef.current = true;
+    try {
+      await joinVoicePresence(user, serverId, channel.id, { isMuted, isDeafened });
+    } catch (err) {
+      logWarn('join voice', err);
+      showError('Erro na voz', 'Não foi possível entrar no canal de voz.');
+      teardown();
+    } finally {
+      setTimeout(() => {
+        leavingRef.current = false;
+      }, 1500);
+    }
+  };
+
+  // Leave voice when signing out or closing the window.
+  useEffect(() => {
+    const onExit = () => {
+      if (activeRef.current && userId) leaveVoicePresence(userId).catch(() => {});
+    };
+    window.addEventListener('beforeunload', onExit);
+    window.addEventListener('concord:before-logout', onExit);
+    return () => {
+      window.removeEventListener('beforeunload', onExit);
+      window.removeEventListener('concord:before-logout', onExit);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId && activeRef.current) teardown();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  // ---------------------------------------------------------------------------
+  // Mute / deafen / volumes / push-to-talk
+  // ---------------------------------------------------------------------------
+
+  const publishState = (fields) => {
+    if (activeRef.current && userId) quietly('voice state', updateVoicePresence(userId, fields));
+  };
+
+  const toggleMute = () => {
+    if (isServerMuted && isMuted) {
+      showToast('Um moderador silenciou você neste servidor.', 'warning');
+      return;
+    }
+    const next = !isMuted;
+    flags.current.isMuted = next;
+    setIsMuted(next);
+    if (!next && isDeafened) {
+      flags.current.isDeafened = false;
+      setIsDeafened(false);
+      remoteNodesRef.current.forEach((n, id) => { n.gain.gain.value = volumeFor(id); });
+    }
+    applyTransmitState(hangoverRef.current.open);
+    publishState({ isMuted: next, isDeafened: next ? isDeafened : false });
+  };
+
+  const toggleDeafen = () => {
+    const next = !isDeafened;
+    flags.current.isDeafened = next;
+    setIsDeafened(next);
+    if (next) {
+      flags.current.isMuted = true;
+      setIsMuted(true);
+    }
+    remoteNodesRef.current.forEach((n, id) => {
+      n.gain.gain.value = next ? 0 : volumeFor(id);
+    });
+    applyTransmitState(false);
+    publishState({ isDeafened: next, isMuted: next ? true : isMuted });
+  };
+
+  // A moderator's server mute applies immediately.
+  useEffect(() => {
+    if (isServerMuted && activeVoiceChannel && !isMuted) {
+      flags.current.isMuted = true;
+      setIsMuted(true);
+      applyTransmitState(false);
+      publishState({ isMuted: true });
+      showToast('Um moderador silenciou você neste servidor.', 'warning');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isServerMuted, activeVoiceChannel?.id]);
+
+  const setUserVolume = (targetUserId, volume) => {
+    const v = Math.max(0, Math.min(2, Number(volume)));
+    setUserVolumes((prev) => {
+      const next = new Map(prev);
+      next.set(targetUserId, v);
+      try {
+        localStorage.setItem('concord_user_volumes', JSON.stringify(Object.fromEntries(next)));
+      } catch (err) {
+        logWarn('save volumes', err);
+      }
+      return next;
+    });
+    const nodes = remoteNodesRef.current.get(targetUserId);
+    if (nodes) nodes.gain.gain.value = flags.current.isDeafened ? 0 : v;
+  };
+
+  useEffect(() => {
+    if (settings.voiceMode !== 'ptt') {
+      setIsPttPressed(false);
+      return undefined;
+    }
+    const isEditable = (el) => el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+    const onDown = (e) => {
+      if (e.code === settings.pttKey && !e.repeat && !(isEditable(e.target) && e.code.startsWith('Key'))) setIsPttPressed(true);
+    };
+    const onUp = (e) => {
+      if (e.code === settings.pttKey) setTimeout(() => setIsPttPressed(false), settings.pttReleaseDelayMs);
+    };
+    const onBlur = () => setIsPttPressed(false);
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    // Desktop app: global key hook works while the window is in the background.
+    const offGlobal = window.electronAPI?.onPushToTalk?.((pressed) => {
+      if (pressed) setIsPttPressed(true);
+      else setTimeout(() => setIsPttPressed(false), settings.pttReleaseDelayMs);
+    });
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+      offGlobal?.();
+    };
+  }, [settings.voiceMode, settings.pttKey, settings.pttReleaseDelayMs]);
+
+  useEffect(() => {
+    flags.current.isPttPressed = isPttPressed;
+    applyTransmitState(hangoverRef.current.open);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPttPressed, settings.voiceMode]);
+
+  // ---------------------------------------------------------------------------
+  // Camera (local preview), moderation, soundboard
+  // ---------------------------------------------------------------------------
+
   const toggleCamera = async () => {
     if (!activeVoiceChannel) {
       showError('Canal de Voz Necessário', 'Entre em um canal de voz para ligar a câmera.');
       return;
     }
-
     if (isCameraOn) {
-      if (localCameraStream) {
-        localCameraStream.getTracks().forEach((t) => t.stop());
-      }
+      localCameraStream?.getTracks().forEach((t) => t.stop());
       setLocalCameraStream(null);
       setIsCameraOn(false);
-      updateVoiceUserStateInCloud(activeVoiceChannel.id, user?.id, { isCameraOn: false });
-      showToast('Câmera desativada', 'info');
-    } else {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-          audio: false
-        });
-        setLocalCameraStream(stream);
-        setIsCameraOn(true);
-        updateVoiceUserStateInCloud(activeVoiceChannel.id, user?.id, { isCameraOn: true });
-        showToast('Câmera ativada com sucesso!', 'success');
-      } catch (err) {
-        console.error('Camera error:', err);
-        showError('Permissão de Câmera', 'Não foi possível acessar a webcam. Verifique as permissões de vídeo no navegador.');
-      }
+      publishState({ isCameraOn: false });
+      return;
     }
-  };
-
-  // Toggle Mute
-  const toggleMute = async () => {
-    const nextMuted = !isMutedRef.current;
-    isMutedRef.current = nextMuted;
-    setIsMuted(nextMuted);
-
-    // 1. Instantly silence/enable local stream tracks
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => {
-        track.enabled = !nextMuted;
-      });
-    }
-
-    // 2. Instantly update all active WebRTC senders
-    peerConnectionsRef.current.forEach((pc) => {
-      pc.getSenders().forEach((sender) => {
-        if (sender.track && sender.track.kind === 'audio') {
-          sender.track.enabled = !nextMuted;
-        }
-      });
-    });
-
-    // 3. If unmuting, ensure the mic stream is active and healthy
-    if (!nextMuted) {
-      if (!localStreamRef.current || !localStreamRef.current.active || localStreamRef.current.getAudioTracks().some((t) => t.readyState === 'ended')) {
-        await ensureLocalStream(true);
-      }
-    } else {
-      setIsSpeaking(false);
-      setMicVolumeLevel(0);
-    }
-
-    // 4. Broadcast mute state to socket and cloud
-    if (socket && activeVoiceChannel) {
-      socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
-        channelId: activeVoiceChannel.id,
-        isMuted: nextMuted,
-        isDeafened: isDeafenedRef.current
-      });
-    }
-    if (activeVoiceChannel?.id && user?.id) {
-      updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
-        isMuted: nextMuted,
-        isDeafened: isDeafenedRef.current,
-        username: user.username,
-        avatar: user.avatar
-      });
-    }
-  };
-
-  // Toggle Deafen
-  const toggleDeafen = async () => {
-    const nextDeafened = !isDeafenedRef.current;
-    isDeafenedRef.current = nextDeafened;
-    setIsDeafened(nextDeafened);
-
-    let effectiveMute = isMutedRef.current;
-    if (nextDeafened) {
-      effectiveMute = true;
-      isMutedRef.current = true;
-      setIsMuted(true);
-
-      if (localStreamRef.current) {
-        localStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-      }
-      peerConnectionsRef.current.forEach((pc) => {
-        pc.getSenders().forEach((sender) => {
-          if (sender.track && sender.track.kind === 'audio') {
-            sender.track.enabled = false;
-          }
-        });
-      });
-      setIsSpeaking(false);
-      setMicVolumeLevel(0);
-    }
-
-    // Silence or restore all remote audio outputs
-    remoteAudiosRef.current.forEach((audioEl, targetUserId) => {
-      const userVol = userVolumes.get(targetUserId) !== undefined ? userVolumes.get(targetUserId) : 1;
-      audioEl.muted = nextDeafened;
-      audioEl.volume = nextDeafened ? 0 : userVol;
-    });
-
-    if (socket && activeVoiceChannel) {
-      socket.emit(SOCKET_EVENTS.VOICE_MUTE_STATE, {
-        channelId: activeVoiceChannel.id,
-        isMuted: effectiveMute,
-        isDeafened: nextDeafened
-      });
-    }
-    if (activeVoiceChannel?.id && user?.id) {
-      updateVoiceUserStateInCloud(activeVoiceChannel.id, user.id, {
-        isMuted: effectiveMute,
-        isDeafened: nextDeafened,
-        username: user.username,
-        avatar: user.avatar
-      });
-    }
-  };
-
-  // Set individual user volume
-  const setUserVolume = (targetUserId, volume) => {
-    setUserVolumes((prev) => {
-      const next = new Map(prev);
-      next.set(targetUserId, volume);
-      return next;
-    });
-
-    const audioEl = remoteAudiosRef.current.get(targetUserId);
-    if (audioEl) {
-      const isDeaf = isDeafenedRef.current;
-      audioEl.muted = isDeaf || volume === 0;
-      audioEl.volume = isDeaf ? 0 : volume;
-    }
-  };
-
-  // Cloud WebRTC Voice Signals Listener
-  useEffect(() => {
-    if (!activeVoiceChannel?.id || !user?.id) return;
-
-    const unsub = listenToVoiceSignalsInCloud(activeVoiceChannel.id, user.id, async (sig) => {
-      if (String(sig.senderId) === String(user.id)) return;
-
-      if (sig.type === 'offer') {
-        await handleIncomingVoiceOffer(sig.senderId, activeVoiceChannel.id, sig.data);
-      } else if (sig.type === 'answer') {
-        await handleIncomingVoiceAnswer(sig.senderId, sig.data);
-      } else if (sig.type === 'candidate') {
-        await handleIncomingVoiceCandidate(sig.senderId, sig.data);
-      }
-    });
-
-    return () => {
-      unsub();
-    };
-  }, [activeVoiceChannel?.id, user?.id]);
-
-  // Socket signaling listeners for WebRTC Voice Mesh
-  useEffect(() => {
-    if (!socket) return;
-
-    // List of users in voice room when we join
-    socket.on(SOCKET_EVENTS.VOICE_USERS_LIST, async ({ channelId, users }) => {
-      setVoiceUsers(users || []);
-
-      for (const remoteUser of users) {
-        if (String(remoteUser.userId) === String(user?.id)) continue;
-        if (String(user?.id) < String(remoteUser.userId)) {
-          await initiateVoiceOffer(remoteUser.userId, channelId);
-        }
-      }
-    });
-
-    // When a new user joins the voice room
-    socket.on(SOCKET_EVENTS.VOICE_USER_JOINED, ({ channelId, user: newUser }) => {
-      setVoiceUsers((prev) => {
-        const exists = prev.some((u) => u.userId === newUser.userId);
-        return exists ? prev : [...prev, newUser];
-      });
-    });
-
-    // When a user leaves the voice room
-    socket.on(SOCKET_EVENTS.VOICE_USER_LEFT, ({ userId: leftUserId }) => {
-      setVoiceUsers((prev) => prev.filter((u) => u.userId !== leftUserId));
-
-      if (peerConnectionsRef.current.has(leftUserId)) {
-        peerConnectionsRef.current.get(leftUserId).close();
-        peerConnectionsRef.current.delete(leftUserId);
-      }
-      if (remoteAudiosRef.current.has(leftUserId)) {
-        remoteAudiosRef.current.get(leftUserId).srcObject = null;
-        remoteAudiosRef.current.get(leftUserId).remove();
-        remoteAudiosRef.current.delete(leftUserId);
-      }
-    });
-
-    // Handle incoming Voice SDP Offer
-    socket.on(SOCKET_EVENTS.VOICE_OFFER, async ({ senderUserId, channelId, offer }) => {
-      await handleIncomingVoiceOffer(senderUserId, channelId, offer);
-    });
-
-    // Handle incoming Voice SDP Answer
-    socket.on(SOCKET_EVENTS.VOICE_ANSWER, async ({ senderUserId, answer }) => {
-      await handleIncomingVoiceAnswer(senderUserId, answer);
-    });
-
-    // Handle incoming Voice ICE Candidate
-    socket.on(SOCKET_EVENTS.VOICE_ICE_CANDIDATE, async ({ senderUserId, candidate }) => {
-      await handleIncomingVoiceCandidate(senderUserId, candidate);
-    });
-
-    // Update mute state in list
-    socket.on(SOCKET_EVENTS.VOICE_MUTE_STATE, ({ userId: targetUserId, isMuted: remoteMuted, isDeafened: remoteDeafened }) => {
-      setVoiceUsers((prev) =>
-        prev.map((u) => (u.userId === targetUserId ? { ...u, isMuted: remoteMuted, isDeafened: remoteDeafened } : u))
-      );
-    });
-
-    // Update speaking state in list
-    socket.on(SOCKET_EVENTS.VOICE_SPEAKING_STATE, ({ userId: targetUserId, isSpeaking: remoteSpeaking }) => {
-      setVoiceUsers((prev) =>
-        prev.map((u) => (u.userId === targetUserId ? { ...u, isSpeaking: remoteSpeaking } : u))
-      );
-    });
-
-    // Global voice channel update across the server
-    socket.on('voice:channel_update', ({ channelId, users }) => {
-      setVoiceChannelUsersMap((prev) => {
-        const next = new Map(prev);
-        if (users && users.length > 0) {
-          next.set(channelId, users);
-        } else {
-          next.delete(channelId);
-        }
-        return next;
-      });
-      if (activeVoiceChannel?.id === channelId) {
-        setVoiceUsers(users || []);
-      }
-    });
-
-    return () => {
-      socket.off('voice:channel_update');
-      socket.off(SOCKET_EVENTS.VOICE_USERS_LIST);
-      socket.off(SOCKET_EVENTS.VOICE_USER_JOINED);
-      socket.off(SOCKET_EVENTS.VOICE_USER_LEFT);
-      socket.off(SOCKET_EVENTS.VOICE_OFFER);
-      socket.off(SOCKET_EVENTS.VOICE_ANSWER);
-      socket.off(SOCKET_EVENTS.VOICE_ICE_CANDIDATE);
-      socket.off(SOCKET_EVENTS.VOICE_MUTE_STATE);
-      socket.off(SOCKET_EVENTS.VOICE_SPEAKING_STATE);
-    };
-  }, [socket, user?.id, activeVoiceChannel?.id]);
-
-  // Firestore listener for all voice channels on active server
-  useEffect(() => {
-    if (!activeServer) return;
-
-    const voiceChannels = activeServer.channels?.filter((c) => c.type === 'voice') || [];
-    const unsubscribes = voiceChannels.map((channel) => {
-      return listenToVoiceRoomInCloud(channel.id, (users) => {
-        const seen = new Set();
-        let cleanUsers = (users || []).filter((u) => {
-          if (!u) return false;
-          const key = (u.userId || '') + '_' + (u.username || '');
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-        if (activeVoiceChannel?.id !== channel.id && user) {
-          cleanUsers = cleanUsers.filter(
-            (u) => String(u.userId) !== String(user.id) && u.username?.toLowerCase() !== user.username?.toLowerCase()
-          );
-        }
-
-        setVoiceChannelUsersMap((prev) => {
-          const next = new Map(prev);
-          if (cleanUsers.length > 0) {
-            next.set(channel.id, cleanUsers);
-          } else {
-            next.delete(channel.id);
-          }
-          return next;
-        });
-
-        if (activeVoiceChannel?.id === channel.id) {
-          setVoiceUsers(cleanUsers);
-
-          // Connect WebRTC audio with all other users in this active voice room
-          cleanUsers.forEach((remoteUser) => {
-            if (remoteUser.userId && user?.id && String(remoteUser.userId) !== String(user.id)) {
-              if (String(user.id) < String(remoteUser.userId)) {
-                initiateVoiceOffer(remoteUser.userId, activeVoiceChannel.id);
-              }
-            }
-          });
-        }
-      });
-    });
-
-    return () => {
-      unsubscribes.forEach((unsub) => unsub());
-    };
-  }, [activeServer, activeVoiceChannel?.id, user?.id, user?.username]);
-
-  // Disconnect / Kick user from voice channel (Admin or offline/stuck purge)
-  const kickUserFromVoice = async (channelId, targetUserId, targetUsername) => {
-    if (!channelId || (!targetUserId && !targetUsername)) return;
     try {
-      await kickUserFromVoiceInCloud(channelId, targetUserId, targetUsername);
-      if (socket && socket.connected) {
-        socket.emit(SOCKET_EVENTS.VOICE_LEAVE, { channelId, targetUserId });
-      }
-      showToast(`Usuário desconectado da sala de voz.`, 'info');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: false
+      });
+      setLocalCameraStream(stream);
+      setIsCameraOn(true);
+      publishState({ isCameraOn: true });
     } catch (err) {
-      console.warn('Error disconnecting user from voice:', err);
+      logWarn('camera', err);
+      showError('Permissão de Câmera', 'Não foi possível acessar a webcam. Verifique as permissões de vídeo.');
     }
   };
 
-  // Real-time Voice Heartbeat (every 6 seconds)
-  useEffect(() => {
-    if (!activeVoiceChannel?.id || !user?.id) return;
-    
-    // Initial heartbeat
-    sendVoiceHeartbeatInCloud(activeVoiceChannel.id, user.id, user.username);
-
-    const interval = setInterval(() => {
-      sendVoiceHeartbeatInCloud(activeVoiceChannel.id, user.id, user.username);
-    }, 6000);
-
-    return () => clearInterval(interval);
-  }, [activeVoiceChannel?.id, user?.id, user?.username]);
-
-  // Real-time Global Online Presence Heartbeat (every 6 seconds)
-  useEffect(() => {
-    if (!user?.id) return;
-
-    setUserPresenceInCloud(user.id, user.username, user.status || 'online');
-
-    const interval = setInterval(() => {
-      setUserPresenceInCloud(user.id, user.username, user.status || 'online');
-    }, 6000);
-
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        setUserPresenceInCloud(user.id, user.username, user.status || 'online');
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [user?.id, user?.username, user?.status]);
-
-  // If I was kicked or disconnected from active voice room by another user/admin
-  useEffect(() => {
-    if (!activeVoiceChannel || !user?.id || voiceUsers.length === 0) return;
-    const amIStillInRoom = voiceUsers.some(
-      (u) => String(u.userId) === String(user.id) || (user.username && u.username?.toLowerCase() === user.username.toLowerCase())
-    );
-    if (!amIStillInRoom) {
-      leaveVoice();
-      showToast('Você foi desconectado do canal de voz.', 'warning');
+  const kickUserFromVoice = async (_channelId, targetUserId) => {
+    try {
+      await disconnectFromVoice(targetUserId);
+      showToast('Usuário desconectado da sala de voz.', 'info');
+    } catch (err) {
+      logWarn('disconnect user', err);
+      showError('Sem permissão', 'Apenas moderadores podem desconectar outras pessoas.');
     }
-  }, [voiceUsers, activeVoiceChannel, user?.id, user?.username, leaveVoice, showToast]);
+  };
 
-  // Clean up voice room immediately when closing the tab/window
+  const playSound = (soundId) => {
+    if (!activeVoiceChannel || !user) return;
+    soundSynthesizer.play(soundId);
+    quietly('soundboard', playSoundboard(activeVoiceChannel.serverId, activeVoiceChannel.id, user, soundId));
+  };
+
   useEffect(() => {
-    const handleVoiceUnload = () => {
-      if (activeVoiceChannel?.id && user?.id) {
-        leaveVoiceInCloud(activeVoiceChannel.id, user.id, user.username);
-      }
-      if (user?.id) {
-        setUserPresenceInCloud(user.id, user.username, 'offline');
-      }
-    };
-
-    window.addEventListener('beforeunload', handleVoiceUnload);
-    window.addEventListener('pagehide', handleVoiceUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleVoiceUnload);
-      window.removeEventListener('pagehide', handleVoiceUnload);
-    };
-  }, [activeVoiceChannel?.id, user?.id, user?.username]);
-
-  // Listen to Soundboard events in active voice room
-  useEffect(() => {
-    if (!activeVoiceChannel?.id) return;
-    const unsub = listenToSoundboardInCloud(activeVoiceChannel.id, (data) => {
-      if (data?.soundId && String(data.userId) !== String(user?.id)) {
-        soundSynthesizer.play(data.soundId);
-      }
+    if (!activeVoiceChannel?.id) return undefined;
+    return listenToSoundboard(activeVoiceChannel.serverId, activeVoiceChannel.id, (data) => {
+      if (data.userId !== userId && !flags.current.isDeafened) soundSynthesizer.play(data.soundId);
     });
-    return () => {
-      if (unsub) unsub();
-    };
-  }, [activeVoiceChannel?.id, user?.id]);
+  }, [activeVoiceChannel?.id, activeVoiceChannel?.serverId, userId]);
+
+  // ---------------------------------------------------------------------------
+  // Derived participant lists
+  // ---------------------------------------------------------------------------
+
+  const voiceUsers = useMemo(() => currentParticipants.map((p) => {
+    if (p.userId === userId) {
+      return { ...p, isMuted, isDeafened, isSpeaking, isCameraOn };
+    }
+    return { ...p, isSpeaking: remoteSpeaking.has(p.userId) };
+  }), [currentParticipants, userId, isMuted, isDeafened, isSpeaking, isCameraOn, remoteSpeaking]);
+
+  const voiceChannelUsersMap = useMemo(() => {
+    const byChannel = voiceByServer.get(activeServer?.id) || new Map();
+    const out = new Map();
+    byChannel.forEach((list, channelId) => {
+      out.set(channelId, list.map((p) => {
+        const participant = toParticipant(p);
+        if (p.userId === userId) return { ...participant, isMuted, isDeafened, isSpeaking };
+        return { ...participant, isSpeaking: activeVoiceChannel?.id === channelId && remoteSpeaking.has(p.userId) };
+      }));
+    });
+    return out;
+  }, [voiceByServer, activeServer?.id, userId, isMuted, isDeafened, isSpeaking, remoteSpeaking, activeVoiceChannel?.id]);
 
   return (
     <VoiceContext.Provider
       value={{
         activeVoiceChannel,
+        voiceServer,
         voiceUsers,
         voiceChannelUsersMap,
         isMuted,
         isDeafened,
         isSpeaking,
+        isServerMuted,
         micVolumeLevel,
+        isPttPressed,
+        voiceMode: settings.voiceMode,
+        connectionStats,
+        connectionQuality,
+        averagePing,
         isCameraOn,
         localCameraStream,
         toggleCamera,
@@ -1112,6 +889,9 @@ export function VoiceProvider({ children }) {
         toggleDeafen,
         setUserVolume,
         userVolumes,
+        playSound,
+        publishVoiceState: publishState,
+        localAudioStream: localStreamRef,
         inputDevices,
         outputDevices,
         selectedInputDevice,

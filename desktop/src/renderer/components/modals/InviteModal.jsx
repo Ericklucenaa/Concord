@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
-import { X, Send, Copy, Check, UserPlus, Link as LinkIcon, Sparkles } from 'lucide-react';
+import { inviteLinkFor } from '../../services/cloud/servers';
+import { X, Send, Check, UserPlus, Link as LinkIcon } from 'lucide-react';
 
 export default function InviteModal() {
   const { activeServer, modalState, closeModal, createInvite, selectedChannelForInvite } = useServer();
@@ -55,8 +56,7 @@ export default function InviteModal() {
 
   const getInviteLink = () => {
     if (!generatedCode) return '';
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
-    return `${origin}/#invite=${generatedCode}`;
+    return inviteLinkFor(generatedCode);
   };
 
   const copyLinkToClipboard = () => {

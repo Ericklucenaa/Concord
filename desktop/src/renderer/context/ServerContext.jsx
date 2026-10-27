@@ -1,838 +1,322 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { api } from '../services/api';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
-import { useSocket } from './SocketContext';
-import { SOCKET_EVENTS } from '@shared/constants';
-import { 
-  saveServerToCloud, 
-  deleteServerFromCloud,
-  leaveServerInCloud,
-  getServerFromCloud, 
-  getUserServersFromCloud, 
-  saveInviteToCloud, 
-  getInviteByCodeFromCloud, 
-  joinServerInCloud, 
-  getPendingInvitesFromCloud, 
-  listenToPendingInvitesFromCloud,
-  findUserByNicknameInCloud,
-  respondInviteInCloud 
-} from '../services/cloudSync';
+import * as servers from '../services/cloud/servers';
+import { findUserByNickname } from '../services/cloud/users';
+import { canViewChannel } from '../services/permissions';
+import { logWarn } from '../services/log';
 
 const ServerContext = createContext(null);
 
-// Local fallback data must be scoped per-user, otherwise two different accounts
-// sharing the same machine/browser profile would see each other's servers.
-function localServersKey(userId) {
-  return `concord_local_servers_${userId || 'anon'}`;
+const LAST_CHANNEL_KEY = 'concord_last_channels';
+
+function readLastChannels() {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_CHANNEL_KEY) || '{}');
+  } catch {
+    return {};
+  }
 }
+
+const INITIAL_MODALS = {
+  createServer: false,
+  createChannel: false,
+  invite: false,
+  pendingInvites: false,
+  settings: false,
+  serverSettings: false,
+  quickSwitcher: false,
+  createGroup: false,
+  onboarding: false
+};
 
 export function ServerProvider({ children }) {
   const { isAuthenticated, user } = useAuth();
-  const { socket } = useSocket();
+  const userId = user?.id;
 
-  const getStorageKey = () => user?.id ? `concord_local_servers_${user.id}` : 'concord_local_servers';
-
-  const [servers, setServers] = useState([]);
-  const [activeServer, setActiveServer] = useState(null);
-  const [activeChannel, setActiveChannel] = useState(null);
-  const [serverMembers, setServerMembers] = useState([]);
+  const [serverList, setServerList] = useState([]);
+  const [serversLoaded, setServersLoaded] = useState(false);
+  const [activeServerId, setActiveServerId] = useState(null);
+  const [activeChannelId, setActiveChannelId] = useState(null);
   const [pendingInvites, setPendingInvites] = useState([]);
-  const [isLoadingServers, setIsLoadingServers] = useState(false);
   const [selectedChannelForInvite, setSelectedChannelForInvite] = useState(null);
+  const [modalState, setModalState] = useState(INITIAL_MODALS);
+  const [notice, setNotice] = useState(null);
+  // Server to open as soon as the backend confirms it (just created or joined).
+  const [pendingSelect, setPendingSelect] = useState(null);
+  const knownServerIds = useRef(new Set());
+  const voluntaryExits = useRef(new Set());
 
-  // Modals state
-  const [modalState, setModalState] = useState({
-    createServer: false,
-    createChannel: false,
-    invite: false,
-    pendingInvites: false,
-    settings: false,
-    serverSettings: false,
-    channelPermissions: false
-  });
-
-  const openModal = (modalName, data = null) => {
-    setModalState((prev) => ({ ...prev, [modalName]: true }));
-    if (modalName === 'invite' && data) {
-      setSelectedChannelForInvite(data);
-    }
-  };
-  const closeModal = (modalName) => {
-    setModalState((prev) => ({ ...prev, [modalName]: false }));
-    if (modalName === 'invite') {
-      setSelectedChannelForInvite(null);
-    }
-  };
-
-  const refreshServers = useCallback(async () => {
-    if (!isAuthenticated) return;
-    if (api.hasBackend()) {
-      try {
-        setIsLoadingServers(true);
-        const data = await api.getServers();
-        if (data?.servers && data.servers.length > 0) {
-          setServers(data.servers);
-          setActiveServer((prev) => {
-            if (!prev) return null; // Keep in DMs if in DMs
-            const exists = data.servers.find((s) => s.id === prev.id);
-            return exists || data.servers[0];
-          });
-          return data.servers;
-        }
-      } catch (err) {}
-    }
-
-    try {
-      setIsLoadingServers(true);
-      let cloudServers = [];
-      let fetchSuccess = false;
-      try {
-        cloudServers = await getUserServersFromCloud(user?.id, user?.username);
-        fetchSuccess = true;
-      } catch (cloudErr) {}
-
-      let storedLocal = [];
-      try {
-        storedLocal = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
-      } catch (e) {}
-
-      let combinedServers = [];
-      if (fetchSuccess) {
-        // Cloud is reachable: Firestore is the definitive state
-        combinedServers = cloudServers;
-        try {
-          localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers));
-        } catch (e) {}
-      } else {
-        // Fallback to local storage only if Firestore could not be reached
-        combinedServers = storedLocal;
-      }
-
-      // Check if user has already been initialized
-      const initKey = `concord_init_done_${user?.id || 'anon'}`;
-      const hasInitialized = localStorage.getItem(initKey);
-
-      if (combinedServers.length === 0 && !hasInitialized) {
-        // Create initial default server ONLY for brand new accounts
-        const initialServer = {
-          id: 'concord-space-' + (user?.id ? String(user.id).substring(0, 8) : Date.now()),
-          name: user?.username ? `Servidor de ${user.username}` : 'Comunidade Concord',
-          description: 'Espaço oficial para chat, voz e transmissões ao vivo',
-          icon: `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(user?.username || 'Concord')}`,
-          ownerId: user?.id || 'owner',
-          role: 'owner',
-          channels: [
-            { id: 'ch-geral-' + Date.now(), serverId: 'concord-space-main', name: 'geral', type: 'text', isPrivate: false },
-            { id: 'ch-avisos-' + Date.now(), serverId: 'concord-space-main', name: 'avisos', type: 'text', isPrivate: false },
-            { id: 'ch-voz-1-' + Date.now(), serverId: 'concord-space-main', name: 'Sala de Voz 1', type: 'voice', isPrivate: false },
-            { id: 'ch-voz-2-' + Date.now(), serverId: 'concord-space-main', name: 'Transmissão & Jogos', type: 'voice', isPrivate: false }
-          ],
-          members: user ? [
-            {
-              id: String(user.id),
-              username: user.username,
-              avatar: user.avatar,
-              status: 'online',
-              role: 'owner'
-            }
-          ] : []
-        };
-
-        saveServerToCloud(initialServer);
-        combinedServers = [initialServer];
-        try { 
-          localStorage.setItem(localServersKey(user?.id), JSON.stringify(combinedServers)); 
-          localStorage.setItem(initKey, 'true');
-        } catch (e) {}
-      } else if (combinedServers.length > 0 && !hasInitialized) {
-        try { localStorage.setItem(initKey, 'true'); } catch (e) {}
-      }
-
-      setServers(combinedServers);
-      setActiveServer((prev) => {
-        if (!prev) {
-          return null; // Preserve Direct Messages view if active
-        }
-        const matching = combinedServers.find((s) => s.id === prev.id);
-        if (matching) {
-          if (matching.channels?.length > 0) {
-            setActiveChannel((prevCh) => {
-              if (prevCh && matching.channels.some((c) => c.id === prevCh.id)) {
-                return matching.channels.find((c) => c.id === prevCh.id) || prevCh;
-              }
-              return matching.channels[0];
-            });
-          }
-          setServerMembers(matching.members || []);
-          return matching;
-        }
-        return combinedServers.length > 0 ? combinedServers[0] : null;
-      });
-      return combinedServers;
-    } finally {
-      setIsLoadingServers(false);
-    }
-  }, [isAuthenticated, user]);
-
-  const refreshServerDetails = useCallback(async (serverId) => {
-    if (!serverId) return;
-    if (api.hasBackend()) {
-      try {
-        const data = await api.getServer(serverId);
-        if (data?.server) {
-          setServerMembers(data.server.members || []);
-          setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...data.server } : data.server));
-          if (data.server.channels?.length > 0) {
-            setActiveChannel((prev) => {
-              if (prev && data.server.channels.some((c) => c.id === prev.id)) return prev;
-              return data.server.channels[0];
-            });
-          }
-          return;
-        }
-      } catch (err) {}
-    }
-
-    // Cloud fallback
-    try {
-      const cloudServer = await getServerFromCloud(serverId);
-      if (cloudServer) {
-        setServerMembers(cloudServer.members || []);
-        setActiveServer((prev) => (prev && prev.id === serverId ? { ...prev, ...cloudServer } : cloudServer));
-        if (cloudServer.channels?.length > 0) {
-          setActiveChannel((prev) => {
-            if (prev && cloudServer.channels.some((c) => c.id === prev.id)) return prev;
-            return cloudServer.channels[0];
-          });
-        }
-      }
-    } catch (e) {}
+  const openModal = useCallback((name, data = null) => {
+    setModalState((prev) => ({ ...prev, [name]: true }));
+    if (name === 'invite') setSelectedChannelForInvite(data);
   }, []);
 
-  const refreshPendingInvites = useCallback(async () => {
-    if (!isAuthenticated || !user?.username) return;
-    if (api.hasBackend()) {
-      try {
-        const data = await api.getPendingInvites();
-        if (data?.invites) {
-          setPendingInvites(data.invites);
-          return;
-        }
-      } catch (err) {}
+  const closeModal = useCallback((name) => {
+    setModalState((prev) => ({ ...prev, [name]: false }));
+    if (name === 'invite') setSelectedChannelForInvite(null);
+  }, []);
+
+  // Live list of my servers: channel edits, role changes and kicks show up
+  // for everyone immediately.
+  useEffect(() => {
+    if (!isAuthenticated || !userId) {
+      setServerList([]);
+      setServersLoaded(false);
+      setActiveServerId(null);
+      setActiveChannelId(null);
+      knownServerIds.current = new Set();
+      return undefined;
     }
-
-    // Cloud + local invites
-    try {
-      const cloudInvites = await getPendingInvitesFromCloud(user.username);
-      const myNick = (user.username || '').toLowerCase().replace(/^@/, '');
-      const stored = localStorage.getItem(`concord_invites_${myNick}`);
-      const localList = stored ? JSON.parse(stored) : [];
-
-      const inviteMap = new Map();
-      cloudInvites.forEach((i) => inviteMap.set(i.id || i.code, i));
-      localList.forEach((i) => {
-        const key = i.id || i.code;
-        if (!inviteMap.has(key)) inviteMap.set(key, i);
+    return servers.listenToMyServers(userId, (list) => {
+      list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      const ids = new Set(list.map((s) => s.id));
+      knownServerIds.current.forEach((id) => {
+        if (ids.has(id)) return;
+        if (voluntaryExits.current.has(id)) voluntaryExits.current.delete(id);
+        else setNotice({ type: 'removed', serverId: id, at: Date.now() });
       });
+      knownServerIds.current = ids;
+      setServerList(list);
+      setServersLoaded(true);
+    });
+  }, [isAuthenticated, userId]);
 
-      setPendingInvites(Array.from(inviteMap.values()));
-    } catch (e) {
+  useEffect(() => {
+    if (!userId) {
       setPendingInvites([]);
+      return undefined;
     }
-  }, [isAuthenticated, user?.username]);
+    return servers.listenToMyInvites(userId, setPendingInvites);
+  }, [userId]);
 
   useEffect(() => {
-    if (isAuthenticated && user?.username) {
-      refreshServers();
-      refreshPendingInvites();
+    if (!pendingSelect) return;
+    const server = serverList.find((s) => s.id === pendingSelect.serverId);
+    if (!server) return;
+    setActiveServerId(server.id);
+    setActiveChannelId(pendingSelect.channelId || null);
+    setPendingSelect(null);
+  }, [pendingSelect, serverList]);
 
-      // Real-time Firestore listener for pending invites
-      const unsubCloudInvites = listenToPendingInvitesFromCloud(user.username, (cloudInvites) => {
-        const myNick = (user.username || '').toLowerCase().replace(/^@/, '');
-        const stored = localStorage.getItem(`concord_invites_${myNick}`);
-        const localList = stored ? JSON.parse(stored) : [];
+  const activeServer = useMemo(
+    () => serverList.find((s) => s.id === activeServerId) || null,
+    [serverList, activeServerId]
+  );
 
-        const inviteMap = new Map();
-        cloudInvites.forEach((i) => {
-          const key = i.id || i.code;
-          inviteMap.set(key, i);
-        });
-        localList.forEach((i) => {
-          const key = i.id || i.code;
-          if (!inviteMap.has(key)) inviteMap.set(key, i);
-        });
-
-        setPendingInvites(Array.from(inviteMap.values()));
-      });
-
-      const handleIncomingInvite = () => {
-        refreshPendingInvites();
-      };
-
-      window.addEventListener('storage', handleIncomingInvite);
-      window.addEventListener('concord:invite_created', handleIncomingInvite);
-      return () => {
-        if (unsubCloudInvites) unsubCloudInvites();
-        window.removeEventListener('storage', handleIncomingInvite);
-        window.removeEventListener('concord:invite_created', handleIncomingInvite);
-      };
-    } else {
-      setServers([]);
-      setActiveServer(null);
-      setActiveChannel(null);
-      setServerMembers([]);
-      setPendingInvites([]);
-    }
-  }, [isAuthenticated, user?.username, refreshServers, refreshPendingInvites]);
-
+  // Drop out of a server I no longer belong to (left, kicked or deleted).
   useEffect(() => {
-    if (activeServer?.id) {
-      refreshServerDetails(activeServer.id);
+    if (activeServerId && serversLoaded && !activeServer) {
+      setActiveServerId(null);
+      setActiveChannelId(null);
     }
-  }, [activeServer?.id, refreshServerDetails]);
+  }, [activeServerId, activeServer, serversLoaded]);
 
-  // Socket event listeners
+  const visibleChannels = useMemo(
+    () => (activeServer?.channels || []).filter((c) => canViewChannel(activeServer, userId, c.id)),
+    [activeServer, userId]
+  );
+
+  const activeChannel = useMemo(() => {
+    if (!activeServer) return null;
+    return visibleChannels.find((c) => c.id === activeChannelId) || null;
+  }, [activeServer, visibleChannels, activeChannelId]);
+
+  // Pick a sensible channel when entering a server, or when the current one disappears.
   useEffect(() => {
-    if (!socket) return;
+    if (!activeServer || activeChannel) return;
+    const remembered = readLastChannels()[activeServer.id];
+    const fallback = visibleChannels.find((c) => c.id === remembered)
+      || visibleChannels.find((c) => c.type === 'text')
+      || visibleChannels[0];
+    if (fallback) setActiveChannelId(fallback.id);
+  }, [activeServer, activeChannel, visibleChannels]);
 
-    socket.on(SOCKET_EVENTS.SERVER_UPDATED, ({ server }) => {
-      setServers((prev) => prev.map((s) => s.id === server.id ? { ...s, ...server } : s));
-      setActiveServer((prev) => prev?.id === server.id ? { ...prev, ...server } : prev);
-    });
+  const setActiveServer = useCallback((server) => {
+    setActiveServerId(server?.id || null);
+    setActiveChannelId(null);
+  }, []);
 
-    socket.on(SOCKET_EVENTS.SERVER_DELETED, ({ serverId }) => {
-      setServers((prev) => prev.filter((s) => s.id !== serverId));
-      setActiveServer((prev) => prev?.id === serverId ? null : prev);
-      setActiveChannel(null);
-    });
-
-    socket.on(SOCKET_EVENTS.MEMBER_JOINED, ({ serverId, member }) => {
-      if (activeServer?.id === serverId) {
-        setServerMembers((prev) => [...prev.filter((m) => m.id !== member.id), member]);
-      }
-    });
-
-    socket.on(SOCKET_EVENTS.MEMBER_LEFT, ({ serverId, userId }) => {
-      if (activeServer?.id === serverId) {
-        setServerMembers((prev) => prev.filter((m) => m.id !== userId));
-      }
-    });
-
-    // I was kicked from a server: drop it locally and bounce out of it if it was active
-    socket.on(SOCKET_EVENTS.MEMBER_KICKED, ({ serverId }) => {
-      setServers((prev) => prev.filter((s) => s.id !== serverId));
-      setActiveServer((prev) => {
-        if (prev?.id === serverId) {
-          setActiveChannel(null);
-          return null;
-        }
-        return prev;
-      });
-    });
-
-    socket.on(SOCKET_EVENTS.MEMBER_UPDATED, ({ serverId, member }) => {
-      if (activeServer?.id === serverId) {
-        setServerMembers((prev) => prev.map((m) => m.id === member.id ? { ...m, ...member } : m));
-      }
-    });
-
-    socket.on(SOCKET_EVENTS.CHANNEL_CREATED, ({ serverId, channel }) => {
-      if (activeServer?.id === serverId) {
-        setActiveServer((prev) => ({
-          ...prev,
-          channels: [...(prev.channels || []), channel]
-        }));
-      }
-      setServers((prev) => prev.map((s) => s.id === serverId
-        ? { ...s, channels: [...(s.channels || []), channel] }
-        : s));
-    });
-
-    socket.on(SOCKET_EVENTS.CHANNEL_UPDATED, ({ serverId, channel }) => {
-      const applyUpdate = (list) => (list || []).map((c) => c.id === channel.id ? { ...c, ...channel } : c);
-      if (activeServer?.id === serverId) {
-        setActiveServer((prev) => ({ ...prev, channels: applyUpdate(prev.channels) }));
-        setActiveChannel((prev) => (prev?.id === channel.id ? { ...prev, ...channel } : prev));
-      }
-      setServers((prev) => prev.map((s) => s.id === serverId ? { ...s, channels: applyUpdate(s.channels) } : s));
-    });
-
-    socket.on(SOCKET_EVENTS.CHANNEL_DELETED, ({ serverId, channelId }) => {
-      if (activeServer?.id === serverId) {
-        setActiveServer((prev) => ({
-          ...prev,
-          channels: prev.channels?.filter((c) => c.id !== channelId) || []
-        }));
-        setActiveChannel((prev) => prev?.id === channelId ? null : prev);
-      }
-      setServers((prev) => prev.map((s) => s.id === serverId
-        ? { ...s, channels: (s.channels || []).filter((c) => c.id !== channelId) }
-        : s));
-    });
-
-    socket.on(SOCKET_EVENTS.INVITE_RECEIVED, () => {
-      refreshPendingInvites();
-    });
-
-    return () => {
-      socket.off(SOCKET_EVENTS.SERVER_UPDATED);
-      socket.off(SOCKET_EVENTS.SERVER_DELETED);
-      socket.off(SOCKET_EVENTS.MEMBER_JOINED);
-      socket.off(SOCKET_EVENTS.MEMBER_LEFT);
-      socket.off(SOCKET_EVENTS.MEMBER_KICKED);
-      socket.off(SOCKET_EVENTS.MEMBER_UPDATED);
-      socket.off(SOCKET_EVENTS.CHANNEL_CREATED);
-      socket.off(SOCKET_EVENTS.CHANNEL_UPDATED);
-      socket.off(SOCKET_EVENTS.CHANNEL_DELETED);
-      socket.off(SOCKET_EVENTS.INVITE_RECEIVED);
-    };
-  }, [socket, activeServer?.id, refreshPendingInvites]);  const createServer = async (serverData) => {
-    if (api.hasBackend()) {
+  const setActiveChannel = useCallback((channel) => {
+    setActiveChannelId(channel?.id || null);
+    if (channel?.id && activeServerId) {
       try {
-        const data = await api.createServer(serverData);
-        await refreshServers();
-        if (data?.server) {
-          setActiveServer(data.server);
-          saveServerToCloud(data.server);
-        }
-        return data;
-      } catch (err) {}
+        localStorage.setItem(LAST_CHANNEL_KEY, JSON.stringify({ ...readLastChannels(), [activeServerId]: channel.id }));
+      } catch (err) {
+        logWarn('remember channel', err);
+      }
     }
+  }, [activeServerId]);
 
-    const DEFAULT_APP_ICON = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' width='100' height='100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236366f1'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='26' fill='url(%23g)'/><circle cx='50' cy='50' r='12' fill='%23ffffff'/><path d='M 30 50 A 20 20 0 0 1 70 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/><path d='M 20 50 A 30 30 0 0 1 80 50' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' opacity='0.6'/></svg>";
+  /** Jumps straight to a channel in any of my servers (quick switcher, mentions). */
+  const goToChannel = useCallback((serverId, channelId) => {
+    setActiveServerId(serverId);
+    setActiveChannelId(channelId);
+  }, []);
 
-    const newId = 'srv-' + Date.now();
-    const newServer = {
-      id: newId,
-      name: serverData.name.trim(),
-      description: serverData.description?.trim() || '',
-      icon: serverData.icon || DEFAULT_APP_ICON,
-      ownerId: user?.id || 'owner',
-      role: 'owner',
-      channels: [
-        { id: 'ch-' + Date.now() + '-1', serverId: newId, name: 'geral', type: 'text', isPrivate: false },
-        { id: 'ch-' + Date.now() + '-2', serverId: newId, name: 'Sala Geral', type: 'voice', isPrivate: false }
-      ],
-      members: user ? [
-        {
-          id: String(user.id),
-          username: user.username,
-          avatar: user.avatar,
-          status: 'online',
-          role: 'owner'
-        }
-      ] : [],
-      createdAt: new Date().toISOString()
-    };
+  const audit = (serverId, action, extra) => servers.logAudit(serverId, user, action, extra);
 
-    saveServerToCloud(newServer);
+  // ---------------------------------------------------------------------------
+  // Server & channel management
+  // ---------------------------------------------------------------------------
 
-    setServers((prev) => {
-      const next = [...prev, newServer];
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      return next;
+  const createServer = async ({ name, description, icon, starter = false }) => {
+    const server = await servers.createServer(user, {
+      name,
+      description,
+      icon,
+      channels: starter ? servers.starterChannels() : null
     });
-
-    setActiveServer(newServer);
-    setActiveChannel(newServer.channels[0]);
-    setServerMembers(newServer.members);
-    return { server: newServer };
+    setPendingSelect({ serverId: server.id, channelId: server.channels.find((c) => c.type === 'text')?.id });
+    return { server };
   };
 
-  const updateServer = async (serverId, serverData) => {
-    if (api.hasBackend()) {
-      try {
-        const data = await api.updateServer(serverId, serverData);
-        await refreshServerDetails(serverId);
-        await refreshServers();
-        return data;
-      } catch (err) {}
-    }
-
-    let updatedServer = null;
-
-    setActiveServer((prev) => {
-      if (!prev || prev.id !== serverId) return prev;
-      updatedServer = {
-        ...prev,
-        name: serverData.name !== undefined ? serverData.name.trim() : prev.name,
-        description: serverData.description !== undefined ? serverData.description : prev.description,
-        icon: serverData.icon !== undefined ? serverData.icon : prev.icon
-      };
-      saveServerToCloud(updatedServer);
-      return updatedServer;
-    });
-
-    setServers((prev) => {
-      const next = prev.map((s) => {
-        if (s.id !== serverId) return s;
-        return {
-          ...s,
-          name: serverData.name !== undefined ? serverData.name.trim() : s.name,
-          description: serverData.description !== undefined ? serverData.description : s.description,
-          icon: serverData.icon !== undefined ? serverData.icon : s.icon
-        };
-      });
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      return next;
-    });
-
-    return {
-      message: 'Servidor atualizado com sucesso!',
-      server: updatedServer
-    };
-  };
-
-  const createChannel = async (serverId, channelData) => {
-    if (api.hasBackend()) {
-      try {
-        const data = await api.createChannel(serverId, channelData);
-        await refreshServerDetails(serverId);
-        return data;
-      } catch (err) {}
-    }
-
-    const cleanName = channelData.type === 'text' 
-      ? channelData.name.trim().toLowerCase().replace(/\s+/g, '-')
-      : channelData.name.trim();
-
-    const newCh = {
-      id: 'ch-' + Date.now(),
-      serverId,
-      name: cleanName,
-      type: channelData.type || 'text',
-      isPrivate: Boolean(channelData.isPrivate)
-    };
-
-    setActiveServer((prev) => {
-      if (!prev || prev.id !== serverId) return prev;
-      const updated = {
-        ...prev,
-        channels: [...(prev.channels || []), newCh]
-      };
-      saveServerToCloud(updated);
-      return updated;
-    });
-
-    setServers((prev) => {
-      const next = prev.map((s) => s.id === serverId ? { ...s, channels: [...(s.channels || []), newCh] } : s);
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      return next;
-    });
-
-    return { channel: newCh };
-  };
-
-  const deleteChannel = async (serverId, channelId) => {
-    if (!serverId || !channelId) return;
-
-    if (api.hasBackend()) {
-      try {
-        await api.deleteChannel(serverId, channelId);
-        await refreshServerDetails(serverId);
-        return;
-      } catch (err) {}
-    }
-
-    try {
-      await leaveVoiceInCloud(channelId, user?.id, user?.username);
-    } catch (e) {}
-
-    let updatedServer = null;
-    setActiveServer((prev) => {
-      if (!prev || prev.id !== serverId) return prev;
-      const updatedChannels = (prev.channels || []).filter((c) => c.id !== channelId);
-      updatedServer = {
-        ...prev,
-        channels: updatedChannels
-      };
-      saveServerToCloud(updatedServer);
-      return updatedServer;
-    });
-
-    setServers((prev) => {
-      const next = prev.map((s) => {
-        if (s.id !== serverId) return s;
-        const updatedChannels = (s.channels || []).filter((c) => c.id !== channelId);
-        return { ...s, channels: updatedChannels };
-      });
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      return next;
-    });
-
-    setActiveChannel((prev) => {
-      if (prev?.id === channelId) {
-        const remaining = updatedServer?.channels || [];
-        return remaining[0] || null;
-      }
-      return prev;
-    });
+  const updateServer = async (serverId, fields) => {
+    const clean = {};
+    if (fields.name !== undefined) clean.name = fields.name.trim().slice(0, 100);
+    if (fields.description !== undefined) clean.description = fields.description.slice(0, 500);
+    if (fields.icon !== undefined) clean.icon = fields.icon;
+    await servers.updateServerFields(serverId, clean);
+    audit(serverId, 'server_update', { details: Object.keys(clean).join(', ') });
+    return { message: 'Servidor atualizado com sucesso!' };
   };
 
   const deleteServer = async (serverId) => {
-    if (api.hasBackend()) {
-      try {
-        await api.deleteServer(serverId);
-      } catch (err) {}
-    }
-
-    try {
-      await deleteServerFromCloud(serverId);
-    } catch (e) {}
-
-    setServers((prev) => {
-      const next = prev.filter((s) => s.id !== serverId);
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      if (next.length > 0) {
-        setActiveServer(next[0]);
-        setActiveChannel(next[0].channels?.[0] || null);
-        setServerMembers(next[0].members || []);
-      } else {
-        setActiveServer(null);
-        setActiveChannel(null);
-        setServerMembers([]);
-      }
-      return next;
-    });
+    voluntaryExits.current.add(serverId);
+    await servers.deleteServer(serverId);
+    if (activeServerId === serverId) setActiveServer(null);
   };
 
   const leaveServer = async (serverId) => {
-    if (api.hasBackend()) {
-      try {
-        await api.leaveServer(serverId);
-      } catch (err) {}
-    }
-
-    try {
-      await leaveServerInCloud(serverId, user);
-    } catch (e) {}
-
-    setServers((prev) => {
-      const next = prev.filter((s) => s.id !== serverId);
-      try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-      if (next.length > 0) {
-        setActiveServer(next[0]);
-        setActiveChannel(next[0].channels?.[0] || null);
-        setServerMembers(next[0].members || []);
-      } else {
-        setActiveServer(null);
-        setActiveChannel(null);
-        setServerMembers([]);
-      }
-      return next;
-    });
+    const server = serverList.find((s) => s.id === serverId);
+    if (!server) return;
+    voluntaryExits.current.add(serverId);
+    await servers.leaveServer(server, userId);
+    if (activeServerId === serverId) setActiveServer(null);
   };
 
-  const createInvite = async (serverId, inviteData) => {
-    if (api.hasBackend()) {
-      try {
-        return await api.createInvite(serverId, inviteData);
-      } catch (err) {}
-    }
+  const createChannel = async (serverId, data) => {
+    const channel = await servers.addChannel(serverId, data);
+    audit(serverId, 'channel_create', { targetId: channel.id, targetName: channel.name });
+    return { channel };
+  };
 
-    const targetServer = servers.find((s) => s.id === serverId) || activeServer;
-    if (!targetServer) {
-      throw new Error('Servidor não encontrado.');
-    }
+  const updateChannel = async (serverId, channelId, data) => {
+    await servers.updateChannel(serverId, channelId, data);
+    const channel = activeServer?.channels.find((c) => c.id === channelId);
+    audit(serverId, 'channel_update', { targetId: channelId, targetName: data.name || channel?.name });
+  };
 
-    let targetNickname = null;
-    if (inviteData?.username) {
-      const cleanTarget = inviteData.username.trim().replace(/^@/, '');
-      if (!cleanTarget) {
-        throw new Error('Informe o apelido do usuário para convidar.');
+  const deleteChannel = async (serverId, channelId) => {
+    const channel = serverList.find((s) => s.id === serverId)?.channels.find((c) => c.id === channelId);
+    await servers.deleteChannel(serverId, channelId);
+    audit(serverId, 'channel_delete', { targetId: channelId, targetName: channel?.name });
+  };
+
+  // ---------------------------------------------------------------------------
+  // Members
+  // ---------------------------------------------------------------------------
+
+  const memberAction = (fn, action) => async (serverId, target, ...args) => {
+    await fn(serverId, target.id, ...args);
+    audit(serverId, action, { targetId: target.id, targetName: target.username, details: args.join(', ') });
+  };
+
+  const setMemberRole = memberAction(servers.setMemberRole, 'role_change');
+  const kickMember = memberAction(servers.kickMember, 'kick');
+  const banMember = memberAction(servers.banMember, 'ban');
+  const unbanMember = memberAction(servers.unbanMember, 'unban');
+  const setMemberMuted = async (serverId, target, muted) => {
+    await servers.setMemberMuted(serverId, target.id, muted);
+    audit(serverId, muted ? 'voice_mute' : 'voice_unmute', { targetId: target.id, targetName: target.username });
+  };
+  const transferOwnership = async (serverId, target) => {
+    await servers.transferOwnership(serverId, userId, target.id);
+    audit(serverId, 'ownership_transfer', { targetId: target.id, targetName: target.username });
+  };
+
+  // ---------------------------------------------------------------------------
+  // Invites
+  // ---------------------------------------------------------------------------
+
+  const createInvite = async (serverId, { username, channelId = null } = {}) => {
+    const server = serverList.find((s) => s.id === serverId);
+    if (!server) throw new Error('Servidor não encontrado.');
+
+    let receiver = null;
+    if (username) {
+      const nick = username.trim().replace(/^@/, '');
+      if (nick.toLowerCase() === user.username.toLowerCase()) {
+        throw new Error('Você não pode enviar um convite para si mesmo.');
       }
-
-      if (user?.username && cleanTarget.toLowerCase() === user.username.toLowerCase()) {
-        throw new Error('Você não pode enviar um convite para o seu próprio apelido.');
-      }
-
-      receiverUser = await findUserByNicknameInCloud(cleanTarget);
-      targetNickname = receiverUser ? receiverUser.username : cleanTarget;
+      receiver = await findUserByNickname(nick);
+      if (!receiver) throw new Error(`Nenhum usuário encontrado com o apelido @${nick}.`);
+      if (server.memberIds.includes(receiver.id)) throw new Error(`@${receiver.username} já faz parte deste servidor.`);
     }
 
-    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://concord-3af70.web.app';
-    const inviteLink = `${origin}/#invite=${code}`;
-    
-    const newInvite = {
-      id: 'inv-' + Date.now(),
-      serverId: targetServer.id,
-      serverName: targetServer.name,
-      serverIcon: targetServer.icon,
-      serverDescription: targetServer.description || '',
-      senderUsername: user?.username || 'admin',
-      receiverUsername: targetNickname ? targetNickname.replace(/^@/, '') : null,
-      code,
-      inviteLink,
-      status: 'pending',
-      channelId: inviteData?.channelId || null,
-      createdAt: new Date().toISOString()
-    };
-
-    // Save invite and server to Firestore cloud
-    try {
-      await saveInviteToCloud(newInvite);
-      await saveServerToCloud(targetServer);
-    } catch (cloudErr) {}
-
-    if (newInvite.receiverUsername) {
-      const targetNick = newInvite.receiverUsername.toLowerCase();
-      try {
-        const key = `concord_invites_${targetNick}`;
-        const current = JSON.parse(localStorage.getItem(key) || '[]');
-        current.push(newInvite);
-        localStorage.setItem(key, JSON.stringify(current));
-        window.dispatchEvent(new Event('concord:invite_created'));
-      } catch (e) {}
-    }
+    const invite = await servers.createInvite(server, user, { channelId });
+    if (receiver) await servers.sendInviteToUser(invite, user, receiver);
 
     return {
-      message: newInvite.receiverUsername 
-        ? `Convite enviado com sucesso para a caixa de mensagens de @${newInvite.receiverUsername}!` 
-        : 'Link de convite gerado com sucesso!',
-      invite: newInvite,
-      code
+      message: receiver ? `Convite enviado para a caixa de entrada de @${receiver.username}!` : 'Link de convite gerado com sucesso!',
+      invite,
+      code: invite.code
     };
   };
 
-  const joinByCode = async (code) => {
-    if (!code || !code.trim()) {
-      throw new Error('Código de convite inválido.');
-    }
-
-    const cleanCode = code.trim().toUpperCase();
-
-    if (api.hasBackend()) {
-      try {
-        const data = await api.joinByCode(cleanCode);
-        const updatedServers = await refreshServers();
-        if (data && data.serverId && updatedServers) {
-          const s = updatedServers.find((serv) => serv.id === data.serverId);
-          if (s) {
-            setActiveServer(s);
-            if (s.channels?.length > 0) {
-              const chan = s.channels.find((c) => c.id === data.channelId) || s.channels.find((c) => c.type === 'text') || s.channels[0];
-              setActiveChannel(chan);
-            }
-          }
-        }
-        return data;
-      } catch (err) {}
-    }
-
-    // Look up real server in Firestore cloud
-    const cloudData = await getInviteByCodeFromCloud(cleanCode);
-    
-    if (cloudData && cloudData.server) {
-      const realServer = cloudData.server;
-      const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
-
-      setServers((prev) => {
-        const filtered = prev.filter((s) => s.id !== joinedServer.id);
-        const next = [...filtered, joinedServer];
-        try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
-
-      setActiveServer(joinedServer);
-      if (joinedServer.channels?.length > 0) {
-        const targetChan = joinedServer.channels.find((c) => c.id === cloudData.invite?.channelId);
-        const firstText = joinedServer.channels.find((c) => c.type === 'text');
-        setActiveChannel(targetChan || firstText || joinedServer.channels[0]);
-      }
-
-      return { 
-        message: `Você entrou no servidor "${joinedServer.name}"!`, 
-        server: joinedServer 
-      };
-    }
-
-    // Check local storage for invite code
-    const localServers = JSON.parse(localStorage.getItem(localServersKey(user?.id)) || '[]');
-    const matching = localServers.find((s) => s.inviteCodes?.includes(cleanCode) || s.id === cleanCode);
-    
-    if (matching) {
-      setActiveServer(matching);
-      if (matching.channels?.length > 0) setActiveChannel(matching.channels[0]);
-      return { message: `Você entrou no servidor "${matching.name}"!`, server: matching };
-    }
-
-    throw new Error('Código de convite inválido ou servidor não encontrado.');
-  };
+  const joinByCode = useCallback(async (code) => {
+    if (!code?.trim()) throw new Error('Código de convite inválido.');
+    const { server, invite, alreadyMember } = await servers.joinServerWithCode(code, userId);
+    const target = server.channels.find((c) => c.id === invite.channelId)
+      || server.channels.find((c) => c.type === 'text');
+    setPendingSelect({ serverId: server.id, channelId: target?.id });
+    return {
+      message: alreadyMember ? `Você já faz parte de "${server.name}".` : `Você entrou no servidor "${server.name}"!`,
+      server
+    };
+  }, [userId]);
 
   const respondInvite = async (inviteId, action) => {
-    if (api.hasBackend()) {
-      try {
-        const data = await api.respondInvite(inviteId, action);
-        await refreshPendingInvites();
-        await refreshServers();
-        return data;
-      } catch (err) {}
+    const invite = pendingInvites.find((i) => i.id === inviteId);
+    if (!invite) return { message: 'Convite não encontrado.' };
+    if (action === 'accept') {
+      const result = await joinByCode(invite.code);
+      await servers.markUserInvite(inviteId, 'accepted');
+      return result;
     }
-
-    const inviteToProcess = pendingInvites.find((i) => i.id === inviteId || i.code === inviteId);
-
-    await respondInviteInCloud(inviteId, action, user);
-
-    // Remove from user's pending invites list in localStorage
-    try {
-      const myNick = (user?.username || '').toLowerCase().replace(/^@/, '');
-      const key = `concord_invites_${myNick}`;
-      const current = JSON.parse(localStorage.getItem(key) || '[]');
-      const filtered = current.filter((i) => i.id !== inviteId && i.code !== inviteId);
-      localStorage.setItem(key, JSON.stringify(filtered));
-    } catch (e) {}
-
-    setPendingInvites((prev) => prev.filter((i) => i.id !== inviteId && i.code !== inviteId));
-
-    if (action === 'accept' && inviteToProcess) {
-      try {
-        const realServer = await getServerFromCloud(inviteToProcess.serverId);
-        if (realServer) {
-          const joinedServer = await joinServerInCloud(realServer.id, user) || realServer;
-          setServers((prev) => {
-            const filtered = prev.filter((s) => s.id !== joinedServer.id);
-            const next = [...filtered, joinedServer];
-            try { localStorage.setItem(localServersKey(user?.id), JSON.stringify(next)); } catch (e) {}
-            return next;
-          });
-          setActiveServer(joinedServer);
-          if (joinedServer.channels?.length > 0) {
-            const firstText = joinedServer.channels.find((c) => c.type === 'text');
-            setActiveChannel(firstText || joinedServer.channels[0]);
-          }
-          return { message: `Você entrou no servidor "${joinedServer.name}"!`, serverId: joinedServer.id };
-        }
-      } catch (e) {}
-    }
-
-    return { message: action === 'accept' ? 'Convite aceito!' : 'Convite recusado.' };
+    await servers.deleteUserInvite(inviteId);
+    return { message: 'Convite recusado.' };
   };
 
   return (
     <ServerContext.Provider
       value={{
-        servers,
+        servers: serverList,
+        serversLoaded,
         activeServer,
         activeChannel,
-        serverMembers,
+        visibleChannels,
         pendingInvites,
-        isLoadingServers,
         selectedChannelForInvite,
         modalState,
+        notice,
         openModal,
         closeModal,
         setActiveServer,
         setActiveChannel,
-        refreshServers,
-        refreshServerDetails,
-        refreshPendingInvites,
+        goToChannel,
         createServer,
         updateServer,
         deleteServer,
         leaveServer,
         createChannel,
+        updateChannel,
         deleteChannel,
+        setMemberRole,
+        kickMember,
+        banMember,
+        unbanMember,
+        setMemberMuted,
+        transferOwnership,
         createInvite,
         joinByCode,
         respondInvite

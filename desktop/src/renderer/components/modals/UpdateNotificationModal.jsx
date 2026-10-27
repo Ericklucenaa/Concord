@@ -1,88 +1,59 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Download, RefreshCw, X, CheckCircle2, ArrowRight } from 'lucide-react';
-import { listenToAppVersionInCloud, getLatestAppVersionFromCloud } from '../../services/cloudSync';
+import { Sparkles, Download, RefreshCw, X, ArrowRight } from 'lucide-react';
+import { listenToAppVersion, getLatestAppVersion, compareVersions } from '../../services/cloud/version';
+import { logWarn } from '../../services/log';
 
-export const CURRENT_APP_VERSION = '1.0.0';
-
-// Helper to compare semver versions (e.g. 1.0.2 > 1.0.0)
-function isNewerVersion(latest, current) {
-  if (!latest || !current) return false;
-  const parse = (v) => v.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-  const [lMaj, lMin, lPat] = parse(latest);
-  const [cMaj, cMin, cPat] = parse(current);
-
-  if (lMaj > cMaj) return true;
-  if (lMaj === cMaj && lMin > cMin) return true;
-  if (lMaj === cMaj && lMin === cMin && lPat > cPat) return true;
-  return false;
-}
+const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI?.isElectron);
 
 export default function UpdateNotificationModal() {
-  const isElectron = typeof window !== 'undefined' && Boolean(window.electronAPI);
+  return isElectron ? <UpdateNotifier /> : null;
+}
 
-  // If running in browser / Web, DO NOT show update modal at all
-  if (!isElectron) {
-    return null;
-  }
-
+function UpdateNotifier() {
+  const [currentVersion, setCurrentVersion] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [isOpen, setIsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [statusText, setStatusText] = useState('');
 
-  // Check version on startup and listen for live broadcasts
   useEffect(() => {
+    window.electronAPI.getAppVersion?.().then(setCurrentVersion).catch((err) => logWarn('app version', err));
+  }, []);
+
+  // Check the published manifest on startup and listen for new releases.
+  useEffect(() => {
+    if (!currentVersion) return undefined;
     let isMounted = true;
 
-    const checkVersion = async () => {
-      try {
-        // 1. Try fetching from cloud Firestore
-        let latestData = await getLatestAppVersionFromCloud();
-
-        // 2. Fallback to public version.json
-        if (!latestData) {
-          try {
-            const res = await fetch('/version.json?t=' + Date.now());
-            if (res.ok) {
-              latestData = await res.json();
-            }
-          } catch (e) {}
-        }
-
-        if (latestData && isMounted) {
-          handleIncomingVersion(latestData);
-        }
-      } catch (err) {}
+    const handleIncomingVersion = (info) => {
+      if (!isMounted || !info?.version || compareVersions(info.version, currentVersion) <= 0) return;
+      const dismissed = sessionStorage.getItem('concord_dismissed_update');
+      if (dismissed !== info.version || info.isMandatory) {
+        setUpdateInfo(info);
+        setIsOpen(true);
+      }
     };
 
-    checkVersion();
-
-    // 3. Realtime listener from Cloud Firestore
-    const unsubscribe = listenToAppVersionInCloud((cloudData) => {
-      if (cloudData && isMounted) {
-        handleIncomingVersion(cloudData);
+    (async () => {
+      let latest = await getLatestAppVersion();
+      if (!latest) {
+        try {
+          const res = await fetch(`https://concord-3af70.web.app/version.json?t=${Date.now()}`);
+          if (res.ok) latest = await res.json();
+        } catch (err) {
+          logWarn('version.json', err);
+        }
       }
-    });
+      handleIncomingVersion(latest);
+    })();
 
+    const unsubscribe = listenToAppVersion(handleIncomingVersion);
     return () => {
       isMounted = false;
       unsubscribe();
     };
-  }, []);
-
-  const handleIncomingVersion = (info) => {
-    if (!info || !info.version) return;
-
-    const hasNewUpdate = isNewerVersion(info.version, CURRENT_APP_VERSION);
-    if (hasNewUpdate) {
-      const dismissedVer = sessionStorage.getItem('concord_dismissed_update');
-      if (dismissedVer !== info.version || info.isMandatory) {
-        setUpdateInfo(info);
-        setIsOpen(true);
-      }
-    }
-  };
+  }, [currentVersion]);
 
   const handleDismiss = () => {
     if (updateInfo?.version) {
@@ -110,15 +81,16 @@ export default function UpdateNotificationModal() {
         setStatusText('Baixando nova versão...');
         const res = await window.electronAPI.downloadAndInstallUpdate({
           downloadUrl: updateInfo?.downloadUrl,
-          version: updateInfo?.version
+          version: updateInfo?.version,
+          sha256: updateInfo?.sha256
         });
 
         if (res && res.success) {
           setStatusText('Atualização pronta! Reiniciando aplicativo...');
           setDownloadProgress(100);
         } else {
-          // If direct installation was redirected to browser
-          setStatusText('Download iniciado no seu navegador.');
+          // The main process opens the official releases page when it cannot install.
+          setStatusText(res?.error ? `${res.error} Abrimos a página oficial de downloads.` : 'Abrimos a página oficial de downloads.');
           setTimeout(() => setIsOpen(false), 2000);
         }
       } else {
@@ -197,7 +169,7 @@ export default function UpdateNotificationModal() {
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
             <span style={{ backgroundColor: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: 4, fontFamily: 'var(--font-mono)' }}>
-              v{CURRENT_APP_VERSION}
+              v{currentVersion}
             </span>
             <ArrowRight size={14} style={{ color: 'var(--accent-primary)' }} />
             <span style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#34d399', fontWeight: 700, padding: '2px 8px', borderRadius: 4, fontFamily: 'var(--font-mono)' }}>

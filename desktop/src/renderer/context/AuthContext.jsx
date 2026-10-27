@@ -1,340 +1,241 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { api } from '../services/api';
-import { 
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import {
+  onAuthStateChanged,
+  updateProfile as updateAuthProfile,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword
+} from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
+import {
   auth,
-  checkRedirectResult, 
-  signInWithEmail, 
-  signUpWithEmail, 
-  signOutFirebase 
+  firestore,
+  checkRedirectResult,
+  signInWithEmail,
+  signUpWithEmail,
+  signInWithGoogle,
+  signOutFirebase,
+  syntheticEmailFor
 } from '../services/firebase';
-import { syncUserToCloud, setUserPresenceInCloud, findUserByNicknameInCloud } from '../services/cloudSync';
+import {
+  claimNickname,
+  getUserProfile,
+  lookupNickname,
+  saveUserProfile,
+  validateNickname
+} from '../services/cloud/users';
+import { defaultAvatar } from '../services/cloud/util';
+import { logWarn } from '../services/log';
 
 const AuthContext = createContext(null);
 
+function friendlyAuthError(err) {
+  switch (err?.code) {
+    case 'auth/invalid-credential':
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-login-credentials':
+      return 'Credenciais inválidas. Verifique o usuário/e-mail e a senha.';
+    case 'auth/invalid-email':
+      return 'Formato de e-mail inválido.';
+    case 'auth/too-many-requests':
+      return 'Muitas tentativas sem sucesso. Aguarde um momento e tente novamente.';
+    case 'auth/email-already-in-use':
+      return 'Este e-mail já está cadastrado.';
+    case 'auth/weak-password':
+      return 'A senha deve ter no mínimo 6 caracteres.';
+    case 'auth/network-request-failed':
+      return 'Sem conexão com a internet.';
+    default:
+      return err?.message || 'Erro de autenticação.';
+  }
+}
+
+/** Picks a free nickname for accounts created through Google. */
+async function firstFreeNickname(base, userId) {
+  const clean = (base || 'usuario').normalize('NFD').replace(/[^a-zA-Z0-9_.]/g, '').slice(0, 24) || 'usuario';
+  for (let i = 0; i < 20; i++) {
+    const candidate = i === 0 ? clean : `${clean}${Math.floor(Math.random() * 9000) + 1000}`;
+    const taken = await lookupNickname(candidate);
+    if (!taken || taken.userId === userId) return candidate.length >= 2 ? candidate : `${candidate}_user`;
+  }
+  return `user${userId.slice(0, 8)}`;
+}
+
+/**
+ * Makes sure the signed-in Firebase user has a Concord profile and a reserved
+ * nickname (first Google login, or accounts created by older versions).
+ */
+async function ensureProfile(fbUser) {
+  const existing = await getUserProfile(fbUser.uid).catch(() => null);
+  if (existing?.username) return existing;
+
+  const username = await firstFreeNickname(existing?.username || fbUser.displayName || fbUser.email?.split('@')[0], fbUser.uid);
+  const avatar = existing?.avatar || fbUser.photoURL || defaultAvatar(username);
+  await saveUserProfile(fbUser.uid, {
+    username,
+    avatar,
+    status: 'online',
+    userTag: fbUser.uid.substring(0, 4).toUpperCase(),
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    lastSeen: Date.now()
+  });
+  await claimNickname(fbUser.uid, username, { avatar, email: fbUser.email || '' }).catch((err) => logWarn('claim nickname', err));
+  return getUserProfile(fbUser.uid);
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('concord_cached_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch (e) {
-      return null;
-    }
-  });
-  const [token, setToken] = useState(() => {
-    const t = api.getToken();
-    if (t) return t;
-    try {
-      const saved = localStorage.getItem('concord_cached_user');
-      if (saved) {
-        const u = JSON.parse(saved);
-        if (u?.id) return 'persisted_token_' + u.id;
-      }
-    } catch (e) {}
-    return null;
-  });
+  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const profileUnsubRef = useRef(null);
 
   useEffect(() => {
-    let isMounted = true;
+    checkRedirectResult();
 
-    // 1. Listen to Firebase Auth state changes
-    const unsubscribeAuth = auth.onAuthStateChanged(async (fbUser) => {
-      if (!isMounted) return;
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
+      profileUnsubRef.current?.();
+      profileUnsubRef.current = null;
 
-      if (fbUser) {
-        const token = await fbUser.getIdToken().catch(() => 'fb_token_' + fbUser.uid);
-        api.setToken(token);
-        setToken(token);
-
-        let currentUserData = null;
-        try {
-          const cached = localStorage.getItem('concord_cached_user');
-          if (cached) currentUserData = JSON.parse(cached);
-        } catch (e) {}
-
-        const restoredUser = {
-          id: fbUser.uid,
-          username: currentUserData?.username || fbUser.displayName || fbUser.email?.split('@')[0] || 'Usuário',
-          email: fbUser.email,
-          avatar: currentUserData?.avatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(fbUser.email || fbUser.uid)}`,
-          status: currentUserData?.status || 'online',
-          customStatus: currentUserData?.customStatus || '',
-          userTag: currentUserData?.userTag || fbUser.uid.substring(0, 4).toUpperCase(),
-          createdAt: currentUserData?.createdAt || new Date().toISOString()
-        };
-
-        setUser(restoredUser);
-        try { localStorage.setItem('concord_cached_user', JSON.stringify(restoredUser)); } catch (e) {}
+      if (!fbUser) {
+        setFirebaseUser(null);
+        setProfile(null);
         setIsLoading(false);
-      } else {
-        // If not in Firebase Auth, check local cached user to maintain offline/desktop permanent session
-        let cached = null;
-        try {
-          const raw = localStorage.getItem('concord_cached_user');
-          if (raw) cached = JSON.parse(raw);
-        } catch (e) {}
-
-        const storedToken = api.getToken();
-        if (cached && cached.id) {
-          setUser(cached);
-          if (!storedToken) {
-            const fallbackTok = 'persisted_token_' + cached.id;
-            api.setToken(fallbackTok);
-            setToken(fallbackTok);
-          }
-          setIsLoading(false);
-          return;
-        }
-
-        if (storedToken && api.hasBackend()) {
-          try {
-            const data = await api.getMe();
-            if (isMounted && data && data.user) {
-              setUser(data.user);
-              try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
-              setIsLoading(false);
-              return;
-            }
-          } catch (err) {}
-        }
-
-        if (isMounted && !fbUser && !cached) {
-          setUser(null);
-          setIsLoading(false);
-        }
+        return;
       }
+
+      try {
+        const initial = await ensureProfile(fbUser);
+        setFirebaseUser(fbUser);
+        setProfile(initial);
+      } catch (err) {
+        logWarn('load profile', err);
+        setFirebaseUser(fbUser);
+      } finally {
+        setIsLoading(false);
+      }
+
+      profileUnsubRef.current = onSnapshot(
+        doc(firestore, 'concord_users', fbUser.uid),
+        (snap) => snap.exists() && setProfile(snap.data()),
+        (err) => logWarn('listen own profile', err)
+      );
     });
 
-    // 2. Check if user just returned from Google sign-in redirect
-    async function checkRedirect() {
-      try {
-        const redirectUser = await checkRedirectResult();
-        if (redirectUser && isMounted) {
-          await loginGoogle(redirectUser);
-        }
-      } catch (err) {}
-    }
-    checkRedirect();
-
     return () => {
-      isMounted = false;
-      unsubscribeAuth();
+      unsubscribe();
+      profileUnsubRef.current?.();
     };
   }, []);
 
-  useEffect(() => {
-    if (user?.id) {
-      syncUserToCloud(user);
-      setUserPresenceInCloud(user.id, user.username, 'online');
+  const user = useMemo(() => (firebaseUser
+    ? {
+        id: firebaseUser.uid,
+        email: firebaseUser.email,
+        username: profile?.username || firebaseUser.displayName || 'Usuário',
+        avatar: profile?.avatar || firebaseUser.photoURL || defaultAvatar(firebaseUser.uid),
+        status: profile?.status || 'online',
+        customStatus: profile?.customStatus || null,
+        userTag: profile?.userTag || firebaseUser.uid.substring(0, 4).toUpperCase(),
+        onboardingDone: Boolean(profile?.onboardingDone),
+        createdAt: profile?.createdAt
+      }
+    : null),
+  // Not `profile` itself: heartbeats rewrite `lastSeen` every minute and must
+  // not rebuild the user object (and every effect depending on it).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [firebaseUser, profile?.username, profile?.avatar, profile?.status, JSON.stringify(profile?.customStatus || null),
+    profile?.userTag, profile?.onboardingDone, profile?.createdAt]);
 
-      const handleUnload = () => {
-        setUserPresenceInCloud(user.id, user.username, 'offline');
-      };
-
-      window.addEventListener('beforeunload', handleUnload);
-      window.addEventListener('pagehide', handleUnload);
-
-      return () => {
-        window.removeEventListener('beforeunload', handleUnload);
-        window.removeEventListener('pagehide', handleUnload);
-      };
+  const login = async ({ login: identifier, password }) => {
+    const value = String(identifier || '').trim();
+    let email = value;
+    if (!value.includes('@')) {
+      const entry = await lookupNickname(value);
+      email = entry?.email || syntheticEmailFor(value);
     }
-  }, [user?.id, user?.username]);
-
-  const login = async (credentials) => {
     try {
-      const data = await api.login(credentials);
-      if (!data || !data.token || !data.user) {
-        throw new Error('Resposta de autenticação inválida do servidor.');
-      }
-      api.setToken(data.token);
-      setToken(data.token);
-      setUser(data.user);
-      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API login failed or not available, trying Firebase Auth:', apiErr);
-      try {
-        let loginEmail = credentials.login.trim();
-        let customUsername = credentials.login.trim();
-        let customAvatar = null;
-
-        // If user provided a username rather than an email, look up their cloud user
-        if (!loginEmail.includes('@')) {
-          const userDoc = await findUserByNicknameInCloud(loginEmail);
-          if (userDoc) {
-            if (userDoc.email) {
-              loginEmail = userDoc.email;
-            } else {
-              loginEmail = `${loginEmail.toLowerCase()}@concord.app`;
-            }
-            if (userDoc.username) customUsername = userDoc.username;
-            if (userDoc.avatar) customAvatar = userDoc.avatar;
-          } else {
-            loginEmail = `${loginEmail.toLowerCase()}@concord.app`;
-          }
-        }
-
-        const fbUser = await signInWithEmail(loginEmail, credentials.password);
-        const fbToken = fbUser.accessToken || ('fb_token_' + fbUser.uid);
-        const fbSafeUser = {
-          id: fbUser.uid,
-          username: customUsername || fbUser.displayName || credentials.login.split('@')[0],
-          email: fbUser.email,
-          avatar: customAvatar || fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(credentials.login)}`,
-          status: 'online',
-          createdAt: new Date().toISOString()
-        };
-        api.setToken(fbToken);
-        setToken(fbToken);
-        setUser(fbSafeUser);
-        try { localStorage.setItem('concord_cached_user', JSON.stringify(fbSafeUser)); } catch (e) {}
-        syncUserToCloud(fbSafeUser);
-        return { user: fbSafeUser, token: fbToken };
-      } catch (fbErr) {
-        console.error('Firebase Auth sign in error:', fbErr);
-        if (
-          fbErr.code === 'auth/invalid-credential' || 
-          fbErr.code === 'auth/user-not-found' || 
-          fbErr.code === 'auth/wrong-password' ||
-          fbErr.code === 'auth/invalid-login-credentials'
-        ) {
-          throw new Error('Credenciais inválidas. Verifique o usuário/e-mail e a senha.');
-        } else if (fbErr.code === 'auth/invalid-email') {
-          throw new Error('Formato de e-mail inválido.');
-        } else if (fbErr.code === 'auth/too-many-requests') {
-          throw new Error('Muitas tentativas sem sucesso. Aguarde um momento e tente novamente.');
-        }
-        throw new Error(fbErr.message || apiErr.message || 'Erro ao realizar login.');
-      }
+      await signInWithEmail(email, password);
+    } catch (err) {
+      throw new Error(friendlyAuthError(err));
     }
   };
 
-  const register = async (userData) => {
+  const register = async ({ username, email, password }) => {
+    const nick = validateNickname(username);
+    const taken = await lookupNickname(nick);
+    if (taken) throw new Error(`O apelido @${nick} já está em uso. Escolha outro.`);
+
+    const loginEmail = email?.trim() || syntheticEmailFor(nick);
+    const avatar = defaultAvatar(nick);
+    let fbUser;
     try {
-      const data = await api.register(userData);
-      if (!data || !data.token || !data.user) {
-        throw new Error('Resposta inválida ao cadastrar usuário.');
-      }
-      api.setToken(data.token);
-      setToken(data.token);
-      setUser(data.user);
-      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API register failed or not available, trying Firebase Auth:', apiErr);
-      try {
-        let regEmail = userData.email ? userData.email.trim() : '';
-        if (!regEmail) {
-          regEmail = `${userData.username.trim().toLowerCase()}@concord.app`;
-        }
-        const fbUser = await signUpWithEmail(userData.username, regEmail, userData.password);
-        const fbToken = fbUser.accessToken || ('fb_token_' + fbUser.uid);
-        const fbSafeUser = {
-          id: fbUser.uid,
-          username: userData.username.trim(),
-          email: regEmail,
-          avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(userData.username)}`,
-          status: 'online',
-          createdAt: new Date().toISOString()
-        };
-        api.setToken(fbToken);
-        setToken(fbToken);
-        setUser(fbSafeUser);
-        try { localStorage.setItem('concord_cached_user', JSON.stringify(fbSafeUser)); } catch (e) {}
-        syncUserToCloud(fbSafeUser);
-        return { user: fbSafeUser, token: fbToken };
-      } catch (fbErr) {
-        console.error('Firebase Auth register error:', fbErr);
-        if (fbErr.code === 'auth/email-already-in-use') {
-          throw new Error('Este e-mail já está cadastrado.');
-        } else if (fbErr.code === 'auth/weak-password') {
-          throw new Error('A senha deve ter no mínimo 6 caracteres.');
-        } else if (fbErr.code === 'auth/invalid-email') {
-          throw new Error('Formato de e-mail inválido.');
-        }
-        throw new Error(fbErr.message || apiErr.message || 'Erro ao cadastrar usuário.');
-      }
+      fbUser = await signUpWithEmail(nick, loginEmail, password, avatar);
+    } catch (err) {
+      throw new Error(friendlyAuthError(err));
+    }
+    await saveUserProfile(fbUser.uid, {
+      username: nick,
+      avatar,
+      status: 'online',
+      userTag: fbUser.uid.substring(0, 4).toUpperCase(),
+      createdAt: new Date().toISOString(),
+      lastSeen: Date.now()
+    });
+    await claimNickname(fbUser.uid, nick, { avatar, email: loginEmail });
+    setProfile(await getUserProfile(fbUser.uid));
+  };
+
+  const loginGoogle = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') return;
+      throw new Error(friendlyAuthError(err));
     }
   };
 
-  const loginGoogle = async (googleUser) => {
-    try {
-      // Send the Firebase ID token so the backend can verify the identity
-      // server-side. The backend ignores any client-supplied email/uid.
-      const data = await api.loginWithGoogle({
-        idToken: googleUser.accessToken
+  const logout = useCallback(async () => {
+    window.dispatchEvent(new Event('concord:before-logout'));
+    await signOutFirebase();
+  }, []);
+
+  const updateProfile = async (changes) => {
+    if (!firebaseUser) return null;
+    const fields = {};
+
+    if (changes.username !== undefined && changes.username.trim().replace(/^@/, '') !== profile?.username) {
+      const nick = await claimNickname(firebaseUser.uid, changes.username, {
+        avatar: changes.avatar ?? profile?.avatar ?? '',
+        email: firebaseUser.email || '',
+        previous: profile?.username
       });
-      api.setToken(data.token);
-      setToken(data.token);
-      setUser(data.user);
-      try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
-      syncUserToCloud(data.user);
-      return data;
-    } catch (apiErr) {
-      console.warn('Backend API login with Google not reachable, using direct Firebase session:', apiErr);
-      const fallbackUser = {
-        id: googleUser.uid,
-        username: googleUser.displayName || googleUser.email.split('@')[0],
-        email: googleUser.email,
-        avatar: googleUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(googleUser.email)}`,
-        status: 'online',
-        userTag: googleUser.uid.substring(0, 4).toUpperCase(),
-        createdAt: new Date().toISOString()
-      };
-      const fallbackToken = googleUser.accessToken || ('firebase_token_' + googleUser.uid);
-      api.setToken(fallbackToken);
-      setToken(fallbackToken);
-      setUser(fallbackUser);
-      try { localStorage.setItem('concord_cached_user', JSON.stringify(fallbackUser)); } catch (e) {}
-      syncUserToCloud(fallbackUser);
-      return { user: fallbackUser, token: fallbackToken };
+      fields.username = nick;
+      updateAuthProfile(firebaseUser, { displayName: nick }).catch((err) => logWarn('auth display name', err));
     }
+    if (changes.avatar !== undefined) fields.avatar = changes.avatar;
+    if (changes.status !== undefined) fields.status = changes.status;
+    if (changes.customStatus !== undefined) fields.customStatus = changes.customStatus;
+    if (changes.onboardingDone !== undefined) fields.onboardingDone = changes.onboardingDone;
+
+    if (Object.keys(fields).length > 0) {
+      await saveUserProfile(firebaseUser.uid, fields);
+      setProfile((prev) => ({ ...(prev || {}), ...fields }));
+    }
+    return { user: { ...user, ...fields } };
   };
 
-  const logout = () => {
+  const changePassword = async (currentPassword, newPassword) => {
+    if (!firebaseUser?.email) throw new Error('Esta conta não usa senha (login pelo Google).');
+    if (!newPassword || newPassword.length < 6) throw new Error('A nova senha deve ter no mínimo 6 caracteres.');
     try {
-      signOutFirebase();
-    } catch (e) {}
-    try {
-      localStorage.removeItem('concord_cached_user');
-      localStorage.removeItem('concord_token');
-    } catch (e) {}
-    api.setToken(null);
-    setToken(null);
-    setUser(null);
-  };
-
-  const updateProfile = async (profileData) => {
-    const cleanUsername = profileData.username ? profileData.username.trim().replace(/^@/, '') : user?.username;
-    const updatedUser = {
-      ...user,
-      username: cleanUsername || user?.username,
-      avatar: profileData.avatar !== undefined ? profileData.avatar : user?.avatar,
-      status: profileData.status !== undefined ? profileData.status : user?.status,
-      customStatus: profileData.customStatus !== undefined ? profileData.customStatus : user?.customStatus
-    };
-
-    // 1. Update state and localStorage immediately
-    setUser(updatedUser);
-    try { localStorage.setItem('concord_cached_user', JSON.stringify(updatedUser)); } catch (e) {}
-
-    // 2. Sync to Firestore Cloud in real time
-    if (updatedUser.id) {
-      syncUserToCloud(updatedUser);
-      setUserPresenceInCloud(updatedUser.id, updatedUser.username, updatedUser.status || 'online');
-    }
-
-    // 3. Update backend API if available
-    try {
-      const data = await api.updateProfile(profileData);
-      if (data?.user) {
-        setUser(data.user);
-        try { localStorage.setItem('concord_cached_user', JSON.stringify(data.user)); } catch (e) {}
+      await reauthenticateWithCredential(firebaseUser, EmailAuthProvider.credential(firebaseUser.email, currentPassword));
+      await updatePassword(firebaseUser, newPassword);
+    } catch (err) {
+      if (err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password') {
+        throw new Error('A senha atual está incorreta.');
       }
-      return { user: data?.user || updatedUser };
-    } catch (apiErr) {
-      return { user: updatedUser };
+      throw new Error(friendlyAuthError(err));
     }
   };
 
@@ -342,14 +243,14 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider
       value={{
         user,
-        token,
-        isAuthenticated: Boolean(user && (token || user.id)),
+        isAuthenticated: Boolean(firebaseUser),
         isLoading,
         login,
         register,
         loginGoogle,
         logout,
-        updateProfile
+        updateProfile,
+        changePassword
       }}
     >
       {children}

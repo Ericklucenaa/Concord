@@ -1,12 +1,10 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import { 
-  CheckCircle, 
-  AlertTriangle, 
-  XCircle, 
-  Info, 
-  X, 
-  AlertCircle,
-  Sparkles
+import {
+  CheckCircle,
+  AlertTriangle,
+  XCircle,
+  Info,
+  AlertCircle
 } from 'lucide-react';
 
 const NotificationContext = createContext(null);

@@ -7,6 +7,8 @@ export default function ScreenSharePickerModal() {
     isPickerOpen, 
     setIsPickerOpen, 
     startScreenShare, 
+    includeAudio,
+    setIncludeAudio,
     screenQuality, 
     setScreenQuality, 
     screenFps, 
@@ -144,8 +146,7 @@ export default function ScreenSharePickerModal() {
                 value={screenQuality}
                 onChange={(e) => setScreenQuality(e.target.value)}
               >
-                <option value="auto">Automática (Adaptativa)</option>
-                <option value="720p">720p (HD - Economia de banda)</option>
+                                <option value="720p">720p (HD - Economia de banda)</option>
                 <option value="1080p">1080p (Full HD - Alta fidelidade)</option>
               </select>
             </div>
@@ -162,6 +163,14 @@ export default function ScreenSharePickerModal() {
               </select>
             </div>
           </div>
+
+          <label className="toggle-row" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={includeAudio} onChange={(e) => setIncludeAudio(e.target.checked)} />
+            <div>
+              <strong>Transmitir o áudio do computador</strong>
+              <span>Inclui o som de jogos, vídeos e músicas (Windows). Use fone de ouvido para que as vozes da chamada não voltem na transmissão.</span>
+            </div>
+          </label>
         </div>
 
         <div className="modal-footer">

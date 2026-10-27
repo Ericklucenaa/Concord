@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { SocketProvider } from './context/SocketContext';
 import { ServerProvider, useServer } from './context/ServerContext';
 import { VoiceProvider, useVoice } from './context/VoiceContext';
-import { ScreenShareProvider } from './context/ScreenShareContext';
-import { NotificationProvider } from './context/NotificationContext';
+import { ScreenShareProvider, useScreenShare } from './context/ScreenShareContext';
+import { NotificationProvider, useNotification } from './context/NotificationContext';
 import { DMProvider } from './context/DMContext';
+import { PresenceProvider } from './context/PresenceContext';
+import { UnreadProvider } from './context/UnreadContext';
 
 import TitleBar from './components/TitleBar';
 import ServerSidebar from './components/ServerSidebar';
@@ -17,6 +18,7 @@ import VoiceRoomArea from './components/VoiceRoomArea';
 import MemberListSidebar from './components/MemberListSidebar';
 import MiniStreamPlayer from './components/MiniStreamPlayer';
 import { requestNotificationPermission } from './services/notificationService';
+import { updateSettings } from './services/settings';
 
 import CreateServerModal from './components/modals/CreateServerModal';
 import CreateChannelModal from './components/modals/CreateChannelModal';
@@ -26,9 +28,11 @@ import ScreenSharePickerModal from './components/modals/ScreenSharePickerModal';
 import SettingsModal from './components/modals/SettingsModal';
 import ServerSettingsModal from './components/modals/ServerSettingsModal';
 import UpdateNotificationModal from './components/modals/UpdateNotificationModal';
+import QuickSwitcher from './components/modals/QuickSwitcher';
+import CreateGroupModal from './components/modals/CreateGroupModal';
+import OnboardingModal from './components/modals/OnboardingModal';
 
 import AuthPage from './pages/AuthPage';
-import { useScreenShare } from './context/ScreenShareContext';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -50,8 +54,8 @@ class ErrorBoundary extends React.Component {
         <div style={{ padding: 20, textAlign: 'center', color: '#f87171', backgroundColor: 'var(--bg-secondary)', borderRadius: 8, margin: 20, border: '1px solid #ef4444' }}>
           <h3>Ops! Ocorreu um erro inesperado nesta seção.</h3>
           <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>{this.state.error?.message || 'Erro desconhecido'}</p>
-          <button 
-            className="btn btn-primary" 
+          <button
+            className="btn btn-primary"
             style={{ marginTop: 10 }}
             onClick={() => this.setState({ hasError: false, error: null })}
           >
@@ -64,60 +68,87 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-function MainAppContent() {
-  const { isAuthenticated, isLoading, user } = useAuth();
-  const { activeServer, activeChannel, joinByCode } = useServer();
-  const { activeVoiceChannel } = useVoice();
-  const { isScreenSharing, activePresenter } = useScreenShare();
-  const [showMemberList, setShowMemberList] = useState(true);
+function readInviteCodeFromUrl() {
+  const { hash, search } = window.location;
+  const fromHash = hash.match(/invite=([a-zA-Z0-9]+)/);
+  if (fromHash) return fromHash[1];
+  return new URLSearchParams(search).get('invite');
+}
 
-  // Request native push notification permission
+/** App-wide keyboard shortcuts. */
+function useGlobalShortcuts() {
+  const { openModal, activeServer, activeChannel, visibleChannels, setActiveChannel } = useServer();
+  const { toggleMute } = useVoice();
+  const state = useRef({});
+  state.current = { activeServer, activeChannel, visibleChannels, setActiveChannel, toggleMute, openModal };
+
   useEffect(() => {
-    if (isAuthenticated) {
-      requestNotificationPermission().catch(() => {});
-    }
-  }, [isAuthenticated]);
-
-  // Capture invite code from URL on load (even if unauthenticated)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const hash = window.location.hash;
-    const search = window.location.search;
-    let inviteCode = null;
-
-    if (hash && hash.includes('invite=')) {
-      const match = hash.match(/invite=([a-zA-Z0-9]+)/);
-      if (match) inviteCode = match[1];
-    } else if (search && search.includes('invite=')) {
-      const params = new URLSearchParams(search);
-      inviteCode = params.get('invite');
-    }
-
-    if (inviteCode) {
-      sessionStorage.setItem('pending_invite_code', inviteCode.toUpperCase());
-    }
-  }, []);
-
-  // Auto-join server from pending invite code once authenticated
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    const checkPendingInvite = async () => {
-      const pendingCode = sessionStorage.getItem('pending_invite_code');
-      if (pendingCode) {
-        try {
-          await joinByCode(pendingCode);
-          sessionStorage.removeItem('pending_invite_code');
-          // Clear query/hash from browser URL to clean up the navigation history
-          window.history.replaceState(null, '', window.location.pathname);
-        } catch (err) {
-          console.warn('Auto-join by stored invite link error:', err);
-        }
+    const onKey = (e) => {
+      const s = state.current;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        s.openModal('quickSwitcher');
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        s.toggleMute();
+      } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && s.activeServer) {
+        e.preventDefault();
+        const text = s.visibleChannels.filter((c) => c.type === 'text');
+        const idx = text.findIndex((c) => c.id === s.activeChannel?.id);
+        const next = text[(idx + (e.key === 'ArrowDown' ? 1 : -1) + text.length) % text.length];
+        if (next) s.setActiveChannel(next);
       }
     };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
 
-    checkPendingInvite();
-  }, [isAuthenticated, joinByCode]);
+function MainAppContent() {
+  const { isAuthenticated, isLoading, user } = useAuth();
+  const { activeServer, activeChannel, joinByCode, serversLoaded, notice, openModal } = useServer();
+  const { activeVoiceChannel } = useVoice();
+  const { isScreenSharing, activePresenter } = useScreenShare();
+  const { showToast, showSuccess, showError } = useNotification();
+  const [showMemberList, setShowMemberList] = useState(true);
+  useGlobalShortcuts();
+
+  useEffect(() => {
+    if (isAuthenticated) requestNotificationPermission().catch(() => {});
+  }, [isAuthenticated]);
+
+  // Keep the desktop shell (tray, startup, global push-to-talk) in sync.
+  useEffect(() => {
+    updateSettings({});
+  }, []);
+
+  // Desktop app opened through a concord:// or web invite link.
+  useEffect(() => window.electronAPI?.onInviteLink?.((code) => sessionStorage.setItem('pending_invite_code', code)), []);
+
+  useEffect(() => {
+    const code = readInviteCodeFromUrl();
+    if (code) sessionStorage.setItem('pending_invite_code', code.toUpperCase());
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !serversLoaded) return;
+    const pending = sessionStorage.getItem('pending_invite_code');
+    if (!pending) return;
+    sessionStorage.removeItem('pending_invite_code');
+    window.history.replaceState(null, '', window.location.pathname);
+    joinByCode(pending)
+      .then((res) => showSuccess('Convite aceito', res.message))
+      .catch((err) => showError('Convite', err.message));
+  }, [isAuthenticated, serversLoaded, joinByCode, showSuccess, showError]);
+
+  // First login: walk the user through creating/joining a server.
+  useEffect(() => {
+    if (isAuthenticated && serversLoaded && user && !user.onboardingDone) openModal('onboarding');
+  }, [isAuthenticated, serversLoaded, user?.onboardingDone, openModal, user]);
+
+  useEffect(() => {
+    if (notice?.type === 'removed') showToast('Você não faz mais parte de um dos servidores.', 'warning');
+  }, [notice, showToast]);
 
   if (isLoading) {
     return (
@@ -133,35 +164,26 @@ function MainAppContent() {
     return <AuthPage />;
   }
 
-  // Display Voice Room view if active channel is voice or if user is on the voice view
-  const isVoiceView = activeChannel?.type === 'voice' || (!activeChannel && (activeVoiceChannel || isScreenSharing || activePresenter));
+  const isVoiceView = activeChannel?.type === 'voice'
+    || (!activeChannel && (activeVoiceChannel || isScreenSharing || activePresenter));
 
   return (
     <div className="main-layout">
-      {/* 1. Server Sidebar */}
       <ServerSidebar />
-
-      {/* 2. Channel Sidebar or DM Sidebar */}
       {activeServer ? <ChannelSidebar /> : <DirectMessagesSidebar />}
 
-      {/* 3. Center Workspace */}
-      {activeServer ? (
-        isVoiceView ? (
-          <VoiceRoomArea />
+      <ErrorBoundary>
+        {activeServer ? (
+          isVoiceView ? <VoiceRoomArea /> : <ChatArea onToggleMemberList={() => setShowMemberList(!showMemberList)} />
         ) : (
-          <ChatArea onToggleMemberList={() => setShowMemberList(!showMemberList)} />
-        )
-      ) : (
-        <DirectChatArea />
-      )}
+          <DirectChatArea />
+        )}
+      </ErrorBoundary>
 
-      {/* 4. Right Sidebar: Server Members (only in server view) */}
-      {activeServer && showMemberList && <MemberListSidebar />}
+      {activeServer && showMemberList && !isVoiceView && <MemberListSidebar />}
 
-      {/* Floating Mini Stream Player */}
       <MiniStreamPlayer />
 
-      {/* Modals with ErrorBoundary Protection */}
       <ErrorBoundary>
         <CreateServerModal />
         <CreateChannelModal />
@@ -171,6 +193,9 @@ function MainAppContent() {
         <SettingsModal />
         <ServerSettingsModal />
         <UpdateNotificationModal />
+        <QuickSwitcher />
+        <CreateGroupModal />
+        <OnboardingModal />
       </ErrorBoundary>
     </div>
   );
@@ -180,22 +205,24 @@ export default function App() {
   return (
     <NotificationProvider>
       <AuthProvider>
-        <SocketProvider>
-          <ServerProvider>
-            <DMProvider>
-              <VoiceProvider>
-                <ScreenShareProvider>
-                  <div className="app-container">
-                    <TitleBar />
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, minHeight: 0 }}>
-                      <MainAppContent />
+        <ServerProvider>
+          <DMProvider>
+            <PresenceProvider>
+              <UnreadProvider>
+                <VoiceProvider>
+                  <ScreenShareProvider>
+                    <div className="app-container">
+                      <TitleBar />
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', zIndex: 1, minHeight: 0 }}>
+                        <MainAppContent />
+                      </div>
                     </div>
-                  </div>
-                </ScreenShareProvider>
-              </VoiceProvider>
-            </DMProvider>
-          </ServerProvider>
-        </SocketProvider>
+                  </ScreenShareProvider>
+                </VoiceProvider>
+              </UnreadProvider>
+            </PresenceProvider>
+          </DMProvider>
+        </ServerProvider>
       </AuthProvider>
     </NotificationProvider>
   );

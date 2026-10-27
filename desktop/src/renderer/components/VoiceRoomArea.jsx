@@ -2,26 +2,22 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useVoice } from '../context/VoiceContext';
 import { useScreenShare } from '../context/ScreenShareContext';
 import { useAuth } from '../context/AuthContext';
-import { 
-  Tv, 
-  Maximize2, 
-  Minimize2, 
-  MicOff, 
-  Radio, 
-  Volume2, 
-  VolumeX,
-  Sliders,
-  Settings2,
+import {
+  Tv,
+  Maximize2,
+  Minimize2,
+  MicOff,
+  Radio,
   ExternalLink,
   Sparkles,
   Video,
   VideoOff,
   Headphones,
-  UserX,
   PhoneOff
 } from 'lucide-react';
 import SoundboardModal from './SoundboardModal';
 import { useNotification } from '../context/NotificationContext';
+import { logWarn } from '../services/log';
 
 export default function VoiceRoomArea() {
   const { showConfirm } = useNotification();
@@ -35,7 +31,6 @@ export default function VoiceRoomArea() {
     isCameraOn,
     localCameraStream,
     toggleCamera,
-    setUserVolume,
     kickUserFromVoice
   } = useVoice();
   const { 
@@ -45,8 +40,6 @@ export default function VoiceRoomArea() {
     activePresenter, 
     screenQuality, 
     screenFps, 
-    setScreenQuality, 
-    setScreenFps, 
     stopScreenShare, 
     setIsPickerOpen,
     setActivePresenter 
@@ -55,7 +48,6 @@ export default function VoiceRoomArea() {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isTheater, setIsTheater] = useState(false);
   const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
 
   // Attach active video stream (local or remote) to video element
@@ -75,7 +67,7 @@ export default function VoiceRoomArea() {
       videoEl.play().catch((e) => console.warn('Screen video play:', e));
     } else {
       videoEl.srcObject = null;
-      try { videoEl.load(); } catch (e) {}
+      videoEl.load();
     }
   }, [isScreenSharing, localScreenStream, activePresenter, remoteScreenStreams]);
 
@@ -99,7 +91,9 @@ export default function VoiceRoomArea() {
       } else if (document.pictureInPictureEnabled) {
         await videoRef.current.requestPictureInPicture();
       }
-    } catch (e) {}
+    } catch (err) {
+      logWarn('picture-in-picture', err);
+    }
   };
 
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);

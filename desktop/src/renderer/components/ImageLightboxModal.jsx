@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X, Download, ZoomIn, ZoomOut } from 'lucide-react';
+import { X, Download } from 'lucide-react';
 
 export default function ImageLightboxModal({ imageUrl, onClose }) {
   useEffect(() => {

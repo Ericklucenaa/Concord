@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { useServer } from '../../context/ServerContext';
 import { X, Hash, Volume2 } from 'lucide-react';
 import { CHANNEL_TYPES } from '@shared/constants';
+import ChannelPermissionFields from './ChannelPermissionFields';
 
 export default function CreateChannelModal() {
   const { activeServer, modalState, closeModal, createChannel, setActiveChannel } = useServer();
   const [name, setName] = useState('');
   const [type, setType] = useState(CHANNEL_TYPES.TEXT);
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
+  const [allowedRoles, setAllowedRoles] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -16,6 +18,10 @@ export default function CreateChannelModal() {
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (allowedRoles && allowedRoles.length === 0) {
+      setError('Escolha pelo menos um cargo para o canal privado.');
+      return;
+    }
 
     try {
       setIsLoading(true);
@@ -23,15 +29,18 @@ export default function CreateChannelModal() {
       const data = await createChannel(activeServer.id, {
         name: name.trim(),
         type,
-        isPrivate
+        readOnly: type === CHANNEL_TYPES.TEXT && readOnly,
+        allowedRoles
       });
 
-      if (data?.channel) {
+      if (data?.channel && data.channel.type === CHANNEL_TYPES.TEXT) {
         setActiveChannel(data.channel);
       }
       closeModal('createChannel');
       setName('');
       setType(CHANNEL_TYPES.TEXT);
+      setReadOnly(false);
+      setAllowedRoles(null);
     } catch (err) {
       setError(err.message || 'Erro ao criar canal.');
     } finally {
@@ -95,6 +104,14 @@ export default function CreateChannelModal() {
                 autoFocus
               />
             </div>
+
+            <ChannelPermissionFields
+              type={type}
+              readOnly={readOnly}
+              setReadOnly={setReadOnly}
+              allowedRoles={allowedRoles}
+              setAllowedRoles={setAllowedRoles}
+            />
           </div>
 
           <div className="modal-footer">

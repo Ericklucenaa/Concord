@@ -1,324 +1,219 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Shield, MicOff, Mic, UserX, UserCheck, Radio, Ban, Crown, MessageSquare, ShieldOff } from 'lucide-react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
-import { useSocket } from '../context/SocketContext';
 import { useVoice } from '../context/VoiceContext';
 import { useScreenShare } from '../context/ScreenShareContext';
-import { listenToUserPresenceInCloud } from '../services/cloudSync';
-import { api } from '../services/api';
-import { ROLES, USER_STATUS } from '@shared/constants';
-import { Shield, ShieldAlert, MoreVertical, MicOff, UserX, UserCheck, Radio, Tv } from 'lucide-react';
+import { usePresence } from '../context/PresenceContext';
+import { useDM } from '../context/DMContext';
 import { useNotification } from '../context/NotificationContext';
+import { roleOf, isAdmin, isModerator, outranks, ROLE_LABELS } from '../services/permissions';
+import { defaultAvatar } from '../services/cloud/util';
+
+const GROUPS = [
+  ['owner', 'Dono'],
+  ['admin', 'Administradores'],
+  ['moderator', 'Moderadores']
+];
 
 export default function MemberListSidebar() {
-  const { showConfirm } = useNotification();
-  const { activeServer, serverMembers, refreshServerDetails } = useServer();
+  const { showConfirm, showError, showSuccess } = useNotification();
+  const { activeServer, setMemberRole, kickMember, banMember, setMemberMuted, transferOwnership, setActiveServer } = useServer();
   const { user } = useAuth();
-  const { userStatuses } = useSocket();
   const { activeVoiceChannel, voiceUsers, voiceChannelUsersMap } = useVoice();
   const { watchStream } = useScreenShare();
+  const { getProfile, getStatus, getCustomStatus } = usePresence();
+  const { openDMWithUser, blockUser, unblockUser, isBlocked } = useDM();
+  const [selectedId, setSelectedId] = useState(null);
 
-  const [selectedMember, setSelectedMember] = useState(null);
-  const [cloudStatuses, setCloudStatuses] = useState(new Map());
+  useEffect(() => setSelectedId(null), [activeServer?.id]);
 
-  // Close open member menu when server changes
   useEffect(() => {
-    setSelectedMember(null);
-  }, [activeServer?.id]);
+    if (!selectedId) return undefined;
+    const close = (e) => {
+      if (!e.target.closest('.member-menu') && !e.target.closest('.member-item')) setSelectedId(null);
+    };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [selectedId]);
 
-  // Close member menu on click outside
-  useEffect(() => {
-    if (!selectedMember) return;
-    const handleClickOutside = (e) => {
-      if (!e.target.closest('.dropdown-menu') && !e.target.closest('.member-item')) {
-        setSelectedMember(null);
+  const members = useMemo(() => {
+    if (!activeServer) return [];
+    const voiceChannels = activeServer.channels.filter((c) => c.type === 'voice');
+    return activeServer.memberIds.map((id) => {
+      const profile = getProfile(id);
+      let streamingChannel = null;
+      for (const ch of voiceChannels) {
+        const list = activeVoiceChannel?.id === ch.id ? voiceUsers : voiceChannelUsersMap.get(ch.id) || [];
+        if (list.some((u) => u.userId === id && u.isScreenSharing)) {
+          streamingChannel = ch;
+          break;
+        }
       }
-    };
-    document.addEventListener('pointerdown', handleClickOutside);
-    return () => {
-      document.removeEventListener('pointerdown', handleClickOutside);
-    };
-  }, [selectedMember]);
-
-  useEffect(() => {
-    const unsub = listenToUserPresenceInCloud((statusMap) => {
-      setCloudStatuses(statusMap);
+      return {
+        id,
+        username: profile?.username || 'Carregando…',
+        avatar: profile?.avatar || '',
+        role: roleOf(activeServer, id),
+        status: getStatus(id),
+        custom: getCustomStatus(id),
+        voiceMuted: activeServer.mutedIds.includes(id),
+        streamingChannel
+      };
     });
-    return () => {
-      if (unsub) unsub();
-    };
-  }, []);
+  }, [activeServer, getProfile, getStatus, getCustomStatus, activeVoiceChannel?.id, voiceUsers, voiceChannelUsersMap]);
 
   if (!activeServer) return null;
 
-  const myRole = activeServer.role;
-  const isOwner = myRole === ROLES.OWNER;
-  const isAdmin = myRole === ROLES.ADMIN;
-  const isMod = myRole === ROLES.MODERATOR;
-  const canModerate = isOwner || isAdmin || isMod;
+  const me = user.id;
+  const canMod = isModerator(activeServer, me);
+  const canAdmin = isAdmin(activeServer, me);
+  const isOwner = activeServer.ownerId === me;
 
-  const voiceChannels = activeServer.channels?.filter((c) => c.type === 'voice') || [];
-
-  // Group members
-  const owners = [];
-  const admins = [];
-  const moderators = [];
-  const onlineMembers = [];
-  const offlineMembers = [];
-
-  serverMembers.forEach((member) => {
-    const isMe = member.id === user?.id;
-    const realStatus = userStatuses?.get(member.id) 
-      || cloudStatuses.get(String(member.id)) 
-      || cloudStatuses.get(member.username?.toLowerCase()) 
-      || (isMe ? 'online' : (member.status || USER_STATUS.OFFLINE));
-    
-    // Check if this member is currently streaming
-    let streamingChannel = null;
-    for (const ch of voiceChannels) {
-      const usersInCh = activeVoiceChannel?.id === ch.id ? voiceUsers : (voiceChannelUsersMap.get(ch.id) || []);
-      if (usersInCh.some((u) => (String(u.userId) === String(member.id) || u.username === member.username) && u.isScreenSharing)) {
-        streamingChannel = ch;
-        break;
-      }
-    }
-
-    const memberWithStatus = { 
-      ...member, 
-      status: realStatus,
-      isStreaming: Boolean(streamingChannel),
-      streamingChannel
-    };
-
-    if (member.role === ROLES.OWNER) {
-      owners.push(memberWithStatus);
-    } else if (member.role === ROLES.ADMIN) {
-      admins.push(memberWithStatus);
-    } else if (member.role === ROLES.MODERATOR) {
-      moderators.push(memberWithStatus);
-    } else if (realStatus !== USER_STATUS.OFFLINE) {
-      onlineMembers.push(memberWithStatus);
-    } else {
-      offlineMembers.push(memberWithStatus);
-    }
-  });
-
-  const handleMute = async (targetMember) => {
+  const run = async (fn, success) => {
+    setSelectedId(null);
     try {
-      await api.muteMember(activeServer.id, targetMember.id, !targetMember.mutedByAdmin);
-      refreshServerDetails(activeServer.id);
-      setSelectedMember(null);
+      await fn();
+      if (success) showSuccess('Pronto', success);
     } catch (err) {
-      setSelectedMember(null);
+      showError('Ação não permitida', err.message?.includes('permission') ? 'Você não tem permissão para isso.' : err.message);
     }
   };
 
-  const handleKick = async (targetMember) => {
-    const confirmed = await showConfirm(
-      'Remover Membro',
-      `Tem certeza que deseja remover @${targetMember.username} do servidor?`,
-      { isDanger: true, confirmText: 'Remover Membro' }
-    );
-    if (!confirmed) return;
-    try {
-      await api.kickMember(activeServer.id, targetMember.id);
-      refreshServerDetails(activeServer.id);
-      setSelectedMember(null);
-    } catch (err) {
-      setSelectedMember(null);
+  const onKick = async (m) => {
+    if (await showConfirm('Expulsar membro', `Remover @${m.username} do servidor? A pessoa pode voltar com um novo convite.`, { isDanger: true, confirmText: 'Expulsar' })) {
+      run(() => kickMember(activeServer.id, m), `@${m.username} foi expulso.`);
     }
   };
 
-  const handleChangeRole = async (targetMember, newRole) => {
-    try {
-      await api.updateMemberRole(activeServer.id, targetMember.id, newRole);
-      refreshServerDetails(activeServer.id);
-      setSelectedMember(null);
-    } catch (err) {
-      setSelectedMember(null);
+  const onBan = async (m) => {
+    if (await showConfirm('Banir membro', `Banir @${m.username}? A pessoa não poderá voltar nem com convites.`, { isDanger: true, confirmText: 'Banir' })) {
+      run(() => banMember(activeServer.id, m), `@${m.username} foi banido.`);
     }
   };
 
-  const renderMemberItem = (member) => {
-    const isMe = member.id === user?.id;
-    const isSelected = selectedMember?.id === member.id;
+  const onTransfer = async (m) => {
+    if (await showConfirm('Transferir propriedade', `Tornar @${m.username} o novo dono de "${activeServer.name}"? Você passará a ser admin.`, { isDanger: true, confirmText: 'Transferir' })) {
+      run(() => transferOwnership(activeServer.id, m), `@${m.username} agora é o dono do servidor.`);
+    }
+  };
+
+  const renderMember = (m) => {
+    const isMe = m.id === me;
+    const open = selectedId === m.id;
+    const canActOn = !isMe && outranks(activeServer, me, m.id);
 
     return (
-      <div 
-        key={member.id} 
-        className="member-item"
-        onClick={() => {
-          if (member.isStreaming && member.streamingChannel) {
-            watchStream({ userId: member.id, username: member.username }, member.streamingChannel);
-          } else if (canModerate && !isMe) {
-            setSelectedMember(isSelected ? null : member);
-          }
-        }}
-        style={{ position: 'relative', cursor: 'pointer' }}
-      >
+      <div key={m.id} className={`member-item ${m.status === 'offline' ? 'offline' : ''}`} onClick={() => setSelectedId(open ? null : m.id)}>
         <div className="avatar-wrapper">
-          <img 
-            src={member.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${member.username}`} 
-            alt="" 
-            className="avatar-img" 
-          />
-          <div className={`status-dot ${member.status || 'offline'}`} />
+          <img src={m.avatar || defaultAvatar(m.username)} alt="" className="avatar-img" />
+          <div className={`status-dot ${m.status}`} />
+        </div>
+        <div className="member-info">
+          <span className="member-item-name">{m.username}</span>
+          {m.custom && <span className="member-custom-status">{`${m.custom.emoji || ''} ${m.custom.text || ''}`.trim()}</span>}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0, flex: 1 }}>
-          <span className="member-item-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {member.username}
-          </span>
-          {member.customStatus && (
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
-              {member.customStatus}
-            </span>
-          )}
-        </div>
-
-        {member.isStreaming && (
-          <span 
-            style={{ 
-              display: 'inline-flex', 
-              alignItems: 'center', 
-              gap: 3, 
-              fontSize: 9, 
-              backgroundColor: 'var(--accent-danger)', 
-              color: '#fff', 
-              padding: '2px 5px', 
-              borderRadius: 3, 
-              fontWeight: 800, 
-              marginLeft: 'auto',
-              cursor: 'pointer',
-              boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)'
-            }}
+        {m.streamingChannel && (
+          <span
+            className="live-badge"
             onClick={(e) => {
               e.stopPropagation();
-              watchStream({ userId: member.id, username: member.username }, member.streamingChannel);
+              watchStream({ userId: m.id, username: m.username }, m.streamingChannel);
             }}
-            title="Transmitindo Ao Vivo - Clique para assistir"
+            title="Transmitindo — clique para assistir"
           >
-            <Radio size={10} />
-            AO VIVO
+            <Radio size={10} /> AO VIVO
           </span>
         )}
+        {m.role !== 'member' && <span className={`role-badge ${m.role}`}>{ROLE_LABELS[m.role]}</span>}
+        {m.voiceMuted && <MicOff size={13} className="danger-icon" title="Silenciado na voz por um moderador" />}
 
-        {member.role === ROLES.OWNER && <span className="role-badge owner">Dono</span>}
-        {member.role === ROLES.ADMIN && <span className="role-badge admin">Admin</span>}
-        {member.role === ROLES.MODERATOR && <span className="role-badge moderator">Mod</span>}
-        {Boolean(member.mutedByAdmin) && <MicOff size={13} style={{ color: 'var(--accent-danger)', marginLeft: 4 }} title="Silenciado pelo admin" />}
-
-        {/* Action Menu */}
-        {isSelected && (
-          <div 
-            className="dropdown-menu"
-            style={{
-              position: 'absolute',
-              top: '36px',
-              right: '0',
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-md)',
-              boxShadow: 'var(--shadow-lg)',
-              border: '1px solid var(--border-color)',
-              padding: '6px',
-              zIndex: 100,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '4px',
-              width: '180px'
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button 
-              className="btn btn-secondary" 
-              style={{ fontSize: 12, padding: '6px 8px', justifyContent: 'flex-start', border: 'none' }}
-              onClick={() => handleMute(member)}
-            >
-              <MicOff size={14} />
-              {member.mutedByAdmin ? 'Remover Mute' : 'Silenciar na Voz'}
-            </button>
-
-            {isOwner && member.role !== ROLES.ADMIN && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ fontSize: 12, padding: '6px 8px', justifyContent: 'flex-start', border: 'none' }}
-                onClick={() => handleChangeRole(member, ROLES.ADMIN)}
-              >
-                <Shield size={14} style={{ color: '#818cf8' }} />
-                Promover a Admin
+        {open && (
+          <div className="dropdown-menu member-menu" onClick={(e) => e.stopPropagation()}>
+            {!isMe && (
+              <button className="menu-item" onClick={() => run(async () => {
+                setActiveServer(null);
+                await openDMWithUser({ id: m.id, username: m.username, avatar: m.avatar });
+              })}>
+                <MessageSquare size={14} /> Enviar mensagem
               </button>
             )}
-
-            {(isOwner || isAdmin) && member.role !== ROLES.MODERATOR && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ fontSize: 12, padding: '6px 8px', justifyContent: 'flex-start', border: 'none' }}
-                onClick={() => handleChangeRole(member, ROLES.MODERATOR)}
-              >
-                <Shield size={14} style={{ color: '#10b981' }} />
-                Promover a Mod
+            {canMod && !isMe && (
+              <button className="menu-item" onClick={() => run(() => setMemberMuted(activeServer.id, m, !m.voiceMuted))}>
+                {m.voiceMuted ? <Mic size={14} /> : <MicOff size={14} />}
+                {m.voiceMuted ? 'Remover silêncio na voz' : 'Silenciar na voz'}
               </button>
             )}
-
-            {(isOwner || isAdmin) && member.role !== ROLES.MEMBER && (
-              <button 
-                className="btn btn-secondary" 
-                style={{ fontSize: 12, padding: '6px 8px', justifyContent: 'flex-start', border: 'none' }}
-                onClick={() => handleChangeRole(member, ROLES.MEMBER)}
-              >
-                <UserCheck size={14} />
-                Tornar Membro
+            {canAdmin && canActOn && (
+              <>
+                {isOwner && m.role !== 'admin' && (
+                  <button className="menu-item" onClick={() => run(() => setMemberRole(activeServer.id, m, 'admin'))}>
+                    <Shield size={14} className="role-admin" /> Promover a admin
+                  </button>
+                )}
+                {m.role !== 'moderator' && (
+                  <button className="menu-item" onClick={() => run(() => setMemberRole(activeServer.id, m, 'moderator'))}>
+                    <Shield size={14} className="role-mod" /> {m.role === 'admin' ? 'Rebaixar a moderador' : 'Promover a moderador'}
+                  </button>
+                )}
+                {m.role !== 'member' && (
+                  <button className="menu-item" onClick={() => run(() => setMemberRole(activeServer.id, m, 'member'))}>
+                    <UserCheck size={14} /> Tornar membro
+                  </button>
+                )}
+                {isOwner && (
+                  <button className="menu-item" onClick={() => onTransfer(m)}>
+                    <Crown size={14} /> Transferir propriedade
+                  </button>
+                )}
+                <button className="menu-item danger" onClick={() => onKick(m)}>
+                  <UserX size={14} /> Expulsar
+                </button>
+                <button className="menu-item danger" onClick={() => onBan(m)}>
+                  <Ban size={14} /> Banir
+                </button>
+              </>
+            )}
+            {!isMe && (
+              <button className="menu-item" onClick={() => run(() => (isBlocked(m.id) ? unblockUser(m.id) : blockUser(m.id)))}>
+                {isBlocked(m.id) ? <ShieldOff size={14} /> : <Ban size={14} />}
+                {isBlocked(m.id) ? 'Desbloquear' : 'Bloquear'}
               </button>
             )}
-
-            <button 
-              className="btn btn-danger" 
-              style={{ fontSize: 12, padding: '6px 8px', justifyContent: 'flex-start' }}
-              onClick={() => handleKick(member)}
-            >
-              <UserX size={14} />
-              Expulsar Membro
-            </button>
+            {isMe && <div className="menu-hint">Este é você.</div>}
           </div>
         )}
       </div>
     );
   };
 
+  const byRole = (role) => members.filter((m) => m.role === role);
+  const regular = members.filter((m) => m.role === 'member');
+  const online = regular.filter((m) => m.status !== 'offline');
+  const offline = regular.filter((m) => m.status === 'offline');
+
   return (
     <aside className="member-sidebar">
-      {owners.length > 0 && (
+      {GROUPS.map(([role, title]) => {
+        const list = byRole(role);
+        return list.length > 0 && (
+          <div key={role}>
+            <div className="member-group-title">{title} — {list.length}</div>
+            {list.map(renderMember)}
+          </div>
+        );
+      })}
+      {online.length > 0 && (
         <div>
-          <div className="member-group-title">Proprietário — {owners.length}</div>
-          {owners.map(renderMemberItem)}
+          <div className="member-group-title">Online — {online.length}</div>
+          {online.map(renderMember)}
         </div>
       )}
-
-      {admins.length > 0 && (
+      {offline.length > 0 && (
         <div>
-          <div className="member-group-title">Administradores — {admins.length}</div>
-          {admins.map(renderMemberItem)}
-        </div>
-      )}
-
-      {moderators.length > 0 && (
-        <div>
-          <div className="member-group-title">Moderadores — {moderators.length}</div>
-          {moderators.map(renderMemberItem)}
-        </div>
-      )}
-
-      {onlineMembers.length > 0 && (
-        <div>
-          <div className="member-group-title">Membros Online — {onlineMembers.length}</div>
-          {onlineMembers.map(renderMemberItem)}
-        </div>
-      )}
-
-      {offlineMembers.length > 0 && (
-        <div>
-          <div className="member-group-title">Offline — {offlineMembers.length}</div>
-          {offlineMembers.map(renderMemberItem)}
+          <div className="member-group-title">Offline — {offline.length}</div>
+          {offline.map(renderMember)}
         </div>
       )}
     </aside>

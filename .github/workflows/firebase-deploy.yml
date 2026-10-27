@@ -1,10 +1,9 @@
 name: CI + Deploy (Firebase Hosting)
 
-# Runs the backend test suite on every push/PR, and — only on pushes to
-# main, and only if the tests pass — builds the frontend and deploys it to
-# Firebase Hosting. This never needs your Firebase credentials to leave
-# GitHub: they live encrypted in this repo's Settings → Secrets and
-# Variables → Actions, and only GitHub's own runners ever see them.
+# Every push/PR: lint, build, and run the security-rules + data-layer tests
+# against the Firebase emulators. Pushes to main then deploy the web app to
+# Firebase Hosting. Firestore rules/indexes are deployed by the maintainer with
+# `firebase deploy --only firestore` (see README).
 on:
   push:
     branches: [main]
@@ -12,41 +11,54 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Run backend test suite
+  check:
+    name: Lint, build & test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
-      - name: Install backend deps
-        working-directory: backend
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install dependencies
+        working-directory: desktop
         run: npm ci
-      - name: Run tests
-        working-directory: backend
-        run: npm test
+      - name: Lint
+        working-directory: desktop
+        run: npm run lint
+      - name: Build
+        working-directory: desktop
+        run: npm run build
+      - name: Security rules & data-layer tests (Firebase emulators)
+        working-directory: desktop
+        run: npx --yes firebase-tools@15 emulators:exec --project demo-concord --only firestore,auth "npx vitest run"
 
   deploy:
-    name: Build & deploy frontend to Firebase Hosting
-    needs: test
+    name: Deploy web app to Firebase Hosting
+    needs: check
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
-      - name: Install frontend deps
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install dependencies
         working-directory: desktop
         run: npm ci
-      - name: Build frontend
+      - name: Build
         working-directory: desktop
         env:
-          # Set these two as repo Secrets so the packaged/hosted app points at
-          # your real, publicly-hosted backend instead of localhost:4000.
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-          VITE_SOCKET_URL: ${{ secrets.VITE_SOCKET_URL }}
+          VITE_TURN_URLS: ${{ secrets.VITE_TURN_URLS }}
+          VITE_TURN_USERNAME: ${{ secrets.VITE_TURN_USERNAME }}
+          VITE_TURN_CREDENTIAL: ${{ secrets.VITE_TURN_CREDENTIAL }}
         run: npm run build
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
@@ -54,4 +66,4 @@ jobs:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
           firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
           channelId: live
-          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          projectId: concord-3af70

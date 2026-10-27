@@ -1,556 +1,316 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { useSocket } from './SocketContext';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { useVoice } from './VoiceContext';
 import { useServer } from './ServerContext';
-import { 
-  updateVoiceScreenSharingInCloud, 
-  sendScreenSignalInCloud, 
-  listenToScreenSignalsInCloud 
-} from '../services/cloudSync';
-import { SOCKET_EVENTS, DEFAULT_ICE_SERVERS } from '@shared/constants';
 import { useNotification } from './NotificationContext';
+import { sendScreenSignal, listenToScreenSignals } from '../services/cloud/voice';
+import { getIceServers } from '../services/iceServers';
+import { logWarn, quietly } from '../services/log';
 
 const ScreenShareContext = createContext(null);
 
+const DIMENSIONS = {
+  '720p': { width: 1280, height: 720 },
+  '1080p': { width: 1920, height: 1080 }
+};
+
+/**
+ * Screen sharing over WebRTC. Viewers ask the presenter for the stream
+ * ("viewer_ready"), so upload bandwidth is only spent on people who watch.
+ * Signals carry `to: 'viewer' | 'presenter'` so one user can present and
+ * watch someone else at the same time.
+ */
 export function ScreenShareProvider({ children }) {
   const { showError, showToast } = useNotification();
-  const { socket } = useSocket();
   const { user } = useAuth();
   const { activeServer, activeChannel, setActiveChannel } = useServer();
-  const { activeVoiceChannel, voiceUsers, joinVoice } = useVoice();
+  const { activeVoiceChannel, voiceUsers, joinVoice, publishVoiceState } = useVoice();
+  const userId = user?.id;
 
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localScreenStream, setLocalScreenStream] = useState(null);
-  const [remoteScreenStreams, setRemoteScreenStreams] = useState(new Map()); // Map<userId, MediaStream>
-  const [screenQuality, setScreenQuality] = useState('1080p'); // 'auto', '720p', '1080p'
-  const [screenFps, setScreenFps] = useState(30); // 30 or 60
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState(new Map());
+  const [screenQuality, setScreenQuality] = useState('1080p');
+  const [screenFps, setScreenFps] = useState(30);
+  const [includeAudio, setIncludeAudio] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [activePresenter, setActivePresenter] = useState(null);
+  const [watching, setWatching] = useState(null); // { userId, username }
 
   const localStreamRef = useRef(null);
-  const screenPeerConnectionsRef = useRef(new Map()); // Map<userId, RTCPeerConnection>
+  const toViewersRef = useRef(new Map()); // viewerId -> pc (I present)
+  const fromPresenterRef = useRef(new Map()); // presenterId -> pc (I watch)
+  const iceQueueRef = useRef(new Map()); // `${role}:${peerId}` -> candidates
+  const channelRef = useRef(null);
+  channelRef.current = activeVoiceChannel;
 
-  const getQualityDimensions = (quality) => {
-    switch (quality) {
-      case '720p':
-        return { width: 1280, height: 720 };
-      case '1080p':
-        return { width: 1920, height: 1080 };
-      default:
-        return { width: 1920, height: 1080 };
-    }
+  const presenters = useMemo(() => voiceUsers.filter((u) => u.isScreenSharing), [voiceUsers]);
+
+  // The presenter being shown: my own share, or the stream I chose to watch.
+  const activePresenter = useMemo(() => {
+    if (isScreenSharing) return { userId, username: user?.username, quality: screenQuality, fps: screenFps };
+    return watching;
+  }, [isScreenSharing, watching, userId, user?.username, screenQuality, screenFps]);
+
+  const queueKey = (role, peerId) => `${role}:${peerId}`;
+
+  const drainIce = async (role, peerId, pc) => {
+    const key = queueKey(role, peerId);
+    const queue = iceQueueRef.current.get(key) || [];
+    iceQueueRef.current.delete(key);
+    for (const c of queue) await pc.addIceCandidate(new RTCIceCandidate(c)).catch((err) => logWarn('screen ice', err));
   };
 
-  // Create Peer Connection and send Screen Offer
-  const createAndSendScreenOffer = async (targetUserId, channelId, stream) => {
-    try {
-      const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-      screenPeerConnectionsRef.current.set(targetUserId, pc);
+  const addIce = async (role, peerId, pc, candidate) => {
+    if (pc?.remoteDescription?.type) {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => logWarn('screen ice', err));
+      return;
+    }
+    const key = queueKey(role, peerId);
+    if (!iceQueueRef.current.has(key)) iceQueueRef.current.set(key, []);
+    iceQueueRef.current.get(key).push(candidate);
+  };
 
-      // Add screen video tracks with high-bitrate encoding
-      stream.getVideoTracks().forEach((track) => {
-        const sender = pc.addTrack(track, stream);
+  const signal = (toUserId, type, data) => {
+    const channelId = channelRef.current?.id;
+    if (!channelId || !userId) return;
+    quietly(`screen ${type}`, sendScreenSignal(channelId, userId, toUserId, type, data));
+  };
+
+  // --- Presenter side --------------------------------------------------------
+
+  const offerToViewer = async (viewerId) => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    toViewersRef.current.get(viewerId)?.close();
+    const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+    toViewersRef.current.set(viewerId, pc);
+
+    stream.getTracks().forEach((track) => {
+      const sender = pc.addTrack(track, stream);
+      if (track.kind === 'video') {
         try {
           const params = sender.getParameters();
-          if (!params.encodings) params.encodings = [{}];
-          params.encodings[0].maxBitrate = 8000000; // 8 Mbps for crisp HD 60fps
-          params.encodings[0].degradationPreference = 'maintain-resolution';
-          sender.setParameters(params).catch(() => {});
-        } catch (e) {}
-      });
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          if (socket && socket.connected) {
-            socket.emit(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE, {
-              targetUserId,
-              channelId,
-              candidate: event.candidate
-            });
-          }
-          sendScreenSignalInCloud(channelId, user?.id, targetUserId, 'candidate', event.candidate);
+          if (!params.encodings?.length) params.encodings = [{}];
+          params.encodings[0].maxBitrate = screenFps >= 60 ? 8_000_000 : 5_000_000;
+          params.degradationPreference = 'maintain-resolution';
+          sender.setParameters(params).catch((err) => logWarn('screen bitrate', err));
+        } catch (err) {
+          logWarn('screen encoder params', err);
         }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      if (socket && socket.connected) {
-        socket.emit(SOCKET_EVENTS.SCREEN_OFFER, {
-          targetUserId,
-          channelId,
-          offer
-        });
       }
-      sendScreenSignalInCloud(channelId, user?.id, targetUserId, 'offer', offer);
-    } catch (err) {
-      console.error(`Error sending screen offer to ${targetUserId}:`, err);
-    }
+    });
+
+    pc.onicecandidate = (e) => e.candidate && signal(viewerId, 'candidate', { to: 'viewer', c: e.candidate.toJSON() });
+    pc.onconnectionstatechange = () => {
+      if (['failed', 'closed'].includes(pc.connectionState)) toViewersRef.current.delete(viewerId);
+    };
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    signal(viewerId, 'offer', { type: offer.type, sdp: offer.sdp });
   };
 
-  // Start Screen Share
-  const startScreenShare = async (sourceId) => {
-    let currentVoice = activeVoiceChannel;
+  const stopScreenShare = useCallback(() => {
+    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    localStreamRef.current = null;
+    setLocalScreenStream(null);
+    setIsScreenSharing(false);
+    toViewersRef.current.forEach((pc, viewerId) => {
+      signal(viewerId, 'screen_stopped', {});
+      pc.close();
+    });
+    toViewersRef.current.clear();
+    publishVoiceState({ isScreenSharing: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishVoiceState]);
 
-    // If not connected to voice yet, auto-connect to the active channel if it's voice,
-    // or to the first voice channel in the active server
-    if (!currentVoice) {
-      if (activeChannel?.type === 'voice') {
-        joinVoice(activeChannel);
-        currentVoice = activeChannel;
-      } else if (activeServer?.channels) {
-        const firstVoice = activeServer.channels.find((c) => c.type === 'voice');
-        if (firstVoice) {
-          joinVoice(firstVoice);
-          if (setActiveChannel) setActiveChannel(firstVoice);
-          currentVoice = firstVoice;
-        }
+  const captureScreen = async (sourceId) => {
+    const { width, height } = DIMENSIONS[screenQuality] || DIMENSIONS['1080p'];
+    const video = {
+      width: { ideal: width, max: width },
+      height: { ideal: height, max: height },
+      frameRate: { ideal: screenFps, max: screenFps }
+    };
+    if (window.electronAPI?.selectScreenSource && sourceId) {
+      // The main process answers getDisplayMedia with this source (and system
+      // audio loopback on Windows when requested).
+      await window.electronAPI.selectScreenSource({ sourceId, audio: includeAudio });
+    }
+    return navigator.mediaDevices.getDisplayMedia({
+      video,
+      audio: includeAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false
+    });
+  };
+
+  const startScreenShare = async (sourceId) => {
+    let voice = activeVoiceChannel;
+    if (!voice) {
+      const target = activeChannel?.type === 'voice'
+        ? activeChannel
+        : activeServer?.channels?.find((c) => c.type === 'voice');
+      if (target) {
+        await joinVoice(target);
+        setActiveChannel?.(target);
+        voice = target;
       }
     }
-
-    if (!currentVoice) {
-      showError('Canal de Voz Necessário', 'Clique em um canal de voz na barra lateral para conectar o áudio e a transmissão.');
+    if (!voice) {
+      showError('Canal de Voz Necessário', 'Entre em um canal de voz para transmitir sua tela.');
       return;
     }
 
     try {
-      let stream = null;
-      const { width, height } = getQualityDimensions(screenQuality);
-
-      if (window.electronAPI?.isElectron && sourceId) {
-        // Native Electron screen/window capture via desktopCapturer
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              minWidth: 1280,
-              maxWidth: width,
-              minHeight: 720,
-              maxHeight: height,
-              maxFrameRate: screenFps
-            }
-          }
-        });
-      } else {
-        // Web / Fallback display media with crystal-clear HD & 60fps
-        stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: width, max: width },
-            height: { ideal: height, max: height },
-            frameRate: { ideal: screenFps, max: screenFps },
-            displaySurface: 'monitor'
-          },
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false
-          }
-        });
-      }
-
-      // Maximize video track clarity & detail
-      if (stream.getVideoTracks().length > 0) {
-        const vTrack = stream.getVideoTracks()[0];
-        if ('contentHint' in vTrack) {
-          vTrack.contentHint = 'detail';
-        }
-      }
+      const stream = await captureScreen(sourceId);
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && 'contentHint' in videoTrack) videoTrack.contentHint = screenFps >= 60 ? 'motion' : 'detail';
+      if (videoTrack) videoTrack.onended = () => stopScreenShare();
 
       localStreamRef.current = stream;
       setLocalScreenStream(stream);
       setIsScreenSharing(true);
-      const presenterData = {
-        userId: user?.id || 'presenter',
-        username: user?.username || 'Você',
-        quality: screenQuality,
-        fps: screenFps,
-        channelId: currentVoice.id
-      };
-      setActivePresenter(presenterData);
       setIsPickerOpen(false);
-
-      // Notify Firestore cloud in real-time
-      updateVoiceScreenSharingInCloud(currentVoice.id, user?.id, true, presenterData);
-      showToast('Transmissão de tela iniciada com sucesso!', 'success');
-
-      // Handle user stopping screen share via native browser/OS banner
-      if (stream.getVideoTracks().length > 0) {
-        stream.getVideoTracks()[0].onended = () => {
-          stopScreenShare();
-        };
-      }
-
-      // Notify socket server if connected
-      if (socket && socket.connected) {
-        socket.emit(SOCKET_EVENTS.SCREEN_START, {
-          channelId: currentVoice.id,
-          quality: screenQuality,
-          fps: screenFps
-        });
-      }
-
-      // Send screen video track offer to all participants in voice room
-      for (const remoteUser of voiceUsers) {
-        if (remoteUser.userId === user?.id) continue;
-        createAndSendScreenOffer(remoteUser.userId, currentVoice.id, stream);
-      }
+      setWatching(null);
+      publishVoiceState({ isScreenSharing: true });
+      showToast(
+        includeAudio && stream.getAudioTracks().length === 0
+          ? 'Transmissão iniciada (o áudio do sistema não está disponível nesta fonte).'
+          : 'Transmissão de tela iniciada!',
+        'success'
+      );
     } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
-        return; // User canceled the screen selection prompt
-      }
-      console.error('Error starting screen share:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') return;
+      logWarn('start screen share', err);
       showError('Erro na Transmissão', 'Não foi possível iniciar o compartilhamento de tela.');
     }
   };
 
-  // Stop Screen Share
-  const stopScreenShare = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
-      localStreamRef.current = null;
-    }
+  // --- Viewer side -----------------------------------------------------------
 
-    setLocalScreenStream(null);
-    setIsScreenSharing(false);
-
-    if (activePresenter?.userId === user?.id) {
-      setActivePresenter(null);
-    }
-
-    if (activeVoiceChannel) {
-      updateVoiceScreenSharingInCloud(activeVoiceChannel.id, user?.id, false, null);
-
-      // Broadcast screen_stopped signal to all other voice participants in cloud
-      for (const remoteUser of voiceUsers) {
-        if (remoteUser.userId !== user?.id) {
-          sendScreenSignalInCloud(activeVoiceChannel.id, user?.id, remoteUser.userId, 'screen_stopped', {});
-        }
-      }
-    }
-
-    if (socket && socket.connected && activeVoiceChannel) {
-      socket.emit(SOCKET_EVENTS.SCREEN_STOP, {
-        channelId: activeVoiceChannel.id
-      });
-    }
-
-    // Close screen peer connections
-    screenPeerConnectionsRef.current.forEach((pc) => {
-      try { pc.close(); } catch (e) {}
+  const clearRemote = useCallback((presenterId) => {
+    fromPresenterRef.current.get(presenterId)?.close();
+    fromPresenterRef.current.delete(presenterId);
+    iceQueueRef.current.delete(`viewer:${presenterId}`);
+    setRemoteScreenStreams((prev) => {
+      if (!prev.has(presenterId)) return prev;
+      const next = new Map(prev);
+      next.delete(presenterId);
+      return next;
     });
-    screenPeerConnectionsRef.current.clear();
-  }, [socket, activeVoiceChannel, activePresenter, user?.id, voiceUsers]);
+  }, []);
 
-  // Clean up screen sharing on window refresh or tab close
-  useEffect(() => {
-    const handleUnload = () => {
-      if (isScreenSharing && activeVoiceChannel?.id && user?.id) {
-        updateVoiceScreenSharingInCloud(activeVoiceChannel.id, user.id, false, null);
-        for (const remoteUser of voiceUsers) {
-          if (remoteUser.userId !== user.id) {
-            sendScreenSignalInCloud(activeVoiceChannel.id, user.id, remoteUser.userId, 'screen_stopped', {});
-          }
-        }
-      }
-    };
-
-    window.addEventListener('beforeunload', handleUnload);
-    window.addEventListener('pagehide', handleUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleUnload);
-      window.removeEventListener('pagehide', handleUnload);
-    };
-  }, [isScreenSharing, activeVoiceChannel?.id, user?.id, voiceUsers]);
-
-  const watchStream = (presenterUser, channel) => {
-    if (!presenterUser) return;
-    const targetChannel = channel || activeVoiceChannel;
-    if (targetChannel && (!activeVoiceChannel || activeVoiceChannel.id !== targetChannel.id)) {
-      joinVoice(targetChannel);
-    }
-    if (targetChannel && setActiveChannel) {
-      setActiveChannel(targetChannel);
-    }
-    setActivePresenter({
-      userId: presenterUser.userId,
-      username: presenterUser.username,
-      quality: screenQuality,
-      fps: screenFps
+  const stopWatching = useCallback(() => {
+    setWatching((current) => {
+      if (current) clearRemote(current.userId);
+      return null;
     });
+  }, [clearRemote]);
 
-    // Notify presenter via Firestore that a viewer is ready to receive stream
-    if (user?.id && presenterUser.userId && targetChannel?.id) {
-      sendScreenSignalInCloud(targetChannel.id, user.id, presenterUser.userId, 'viewer_ready', {});
-    }
+  const watchStream = async (presenterUser, channel) => {
+    if (!presenterUser?.userId || presenterUser.userId === userId) return;
+    const target = channel || activeVoiceChannel;
+    if (target && activeVoiceChannel?.id !== target.id) await joinVoice(target);
+    if (target) setActiveChannel?.(target);
+    if (watching?.userId && watching.userId !== presenterUser.userId) clearRemote(watching.userId);
+    setWatching({ userId: presenterUser.userId, username: presenterUser.username, quality: screenQuality, fps: screenFps });
+    setTimeout(() => signal(presenterUser.userId, 'viewer_ready', {}), 300);
   };
 
-  // Synchronize presenter state with Firestore voice room updates
-  useEffect(() => {
-    const handleVoiceUpdate = (e) => {
-      const { channelId, activePresenter: cloudPresenter, users } = e.detail || {};
-      if (activeVoiceChannel && String(channelId) === String(activeVoiceChannel.id)) {
-        if (!cloudPresenter) {
-          setActivePresenter((prev) => {
-            if (prev && prev.userId !== user?.id) {
-              setRemoteScreenStreams(new Map());
-              return null;
-            }
-            return prev;
-          });
-        } else if (cloudPresenter.userId !== user?.id) {
-          // If presenter is not in room users list or no longer marked as sharing, clear immediately
-          const presenterStillSharing = users?.some(
-            (u) => (String(u.userId) === String(cloudPresenter.userId) || u.username === cloudPresenter.username) && u.isScreenSharing
-          );
-          if (!presenterStillSharing) {
-            setActivePresenter(null);
-            setRemoteScreenStreams(new Map());
-          }
-        }
-      }
-    };
+  // Compatibility with components that close the viewer with setActivePresenter(null).
+  const setActivePresenter = (value) => {
+    if (!value) stopWatching();
+  };
 
-    window.addEventListener('concord:voice_update', handleVoiceUpdate);
-    return () => window.removeEventListener('concord:voice_update', handleVoiceUpdate);
-  }, [activeVoiceChannel?.id, user?.id]);
+  // --- Signal routing --------------------------------------------------------
 
-  // Listen to Firestore WebRTC signals for pure Cloud/Hosting mode
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const unsubSignals = listenToScreenSignalsInCloud(user.id, async ({ fromUserId, type, data, channelId }) => {
-      // 1. If we are the presenter and a viewer is ready, send them an offer
+  const handleSignal = async ({ fromUserId, type, data, channelId }) => {
+    if (!channelRef.current || channelId !== channelRef.current.id) return;
+    try {
       if (type === 'viewer_ready') {
-        if (isScreenSharing && localStreamRef.current) {
-          createAndSendScreenOffer(fromUserId, channelId || activeVoiceChannel?.id, localStreamRef.current);
-        }
-      }
-
-      // 2. If screen share stopped by presenter
-      if (type === 'screen_stopped') {
-        setRemoteScreenStreams((prev) => {
-          const next = new Map(prev);
-          next.delete(fromUserId);
-          return next;
-        });
-        setActivePresenter((prev) => {
-          if (prev && String(prev.userId) === String(fromUserId)) {
-            return null;
-          }
-          return prev;
-        });
-        const pc = screenPeerConnectionsRef.current.get(fromUserId);
-        if (pc) {
-          try { pc.close(); } catch (e) {}
-          screenPeerConnectionsRef.current.delete(fromUserId);
-        }
-      }
-
-      // 3. If we receive an offer from presenter
-      if (type === 'offer') {
-        try {
-          const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-          screenPeerConnectionsRef.current.set(fromUserId, pc);
-
-          const cleanupPresenter = () => {
-            setRemoteScreenStreams((prev) => {
-              const next = new Map(prev);
-              next.delete(fromUserId);
-              return next;
-            });
-            setActivePresenter((prev) => (prev?.userId === fromUserId ? null : prev));
-          };
-
-          pc.onconnectionstatechange = () => {
-            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-              cleanupPresenter();
-            }
-          };
-
-          pc.oniceconnectionstatechange = () => {
-            if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-              cleanupPresenter();
-            }
-          };
-
-          pc.onicecandidate = (event) => {
-            if (event.candidate) {
-              sendScreenSignalInCloud(channelId, user.id, fromUserId, 'candidate', event.candidate);
-            }
-          };
-
-          pc.ontrack = (event) => {
-            const [remoteStream] = event.streams;
-            if (remoteStream) {
-              remoteStream.getVideoTracks().forEach((track) => {
-                track.onended = cleanupPresenter;
-              });
-
-              setRemoteScreenStreams((prev) => {
-                const next = new Map(prev);
-                next.set(fromUserId, remoteStream);
-                return next;
-              });
-            }
-          };
-
+        if (localStreamRef.current) await offerToViewer(fromUserId);
+      } else if (type === 'answer') {
+        const pc = toViewersRef.current.get(fromUserId);
+        if (pc?.signalingState === 'have-local-offer') {
           await pc.setRemoteDescription(new RTCSessionDescription(data));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-
-          sendScreenSignalInCloud(channelId, user.id, fromUserId, 'answer', answer);
-        } catch (err) {
-          console.error('Error handling cloud screen offer:', err);
+          await drainIce('presenter', fromUserId, pc);
         }
-      }
-
-      // 4. If presenter receives an answer from viewer
-      if (type === 'answer') {
-        try {
-          const pc = screenPeerConnectionsRef.current.get(fromUserId);
-          if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data));
-          }
-        } catch (err) {
-          console.error('Error handling cloud screen answer:', err);
-        }
-      }
-
-      // 5. If either receives an ICE candidate
-      if (type === 'candidate') {
-        try {
-          const pc = screenPeerConnectionsRef.current.get(fromUserId);
-          if (pc && data) {
-            await pc.addIceCandidate(new RTCIceCandidate(data));
-          }
-        } catch (err) {
-          console.warn('Error adding cloud screen candidate:', err);
-        }
-      }
-    });
-
-    return () => {
-      if (unsubSignals) unsubSignals();
-    };
-  }, [user?.id, isScreenSharing, activeVoiceChannel?.id]);
-
-  // Clean up if leaving voice
-  useEffect(() => {
-    if (!activeVoiceChannel && isScreenSharing) {
-      stopScreenShare();
-    }
-    if (!activeVoiceChannel) {
-      setRemoteScreenStreams(new Map());
-      setActivePresenter(null);
-    }
-  }, [activeVoiceChannel, isScreenSharing, stopScreenShare]);
-
-  // Socket signaling listeners for Screen Share
-  useEffect(() => {
-    if (!socket) return;
-
-    // Remote screen started
-    socket.on(SOCKET_EVENTS.SCREEN_STARTED, ({ channelId, userId: presenterId, username: presenterName }) => {
-      setActivePresenter({
-        userId: presenterId,
-        username: presenterName
-      });
-    });
-
-    // Remote screen stopped
-    socket.on(SOCKET_EVENTS.SCREEN_STOPPED, ({ userId: presenterId }) => {
-      setRemoteScreenStreams((prev) => {
-        const next = new Map(prev);
-        next.delete(presenterId);
-        return next;
-      });
-
-      if (activePresenter?.userId === presenterId) {
-        setActivePresenter(null);
-      }
-
-      if (screenPeerConnectionsRef.current.has(presenterId)) {
-        screenPeerConnectionsRef.current.get(presenterId).close();
-        screenPeerConnectionsRef.current.delete(presenterId);
-      }
-    });
-
-    // Handle incoming Screen Offer from presenter
-    socket.on(SOCKET_EVENTS.SCREEN_OFFER, async ({ senderUserId, channelId, offer }) => {
-      try {
-        const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
-        screenPeerConnectionsRef.current.set(senderUserId, pc);
-
-        pc.onicecandidate = (event) => {
-          if (event.candidate && socket) {
-            socket.emit(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE, {
-              targetUserId: senderUserId,
-              channelId,
-              candidate: event.candidate
-            });
-          }
+      } else if (type === 'offer') {
+        clearRemote(fromUserId);
+        const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+        fromPresenterRef.current.set(fromUserId, pc);
+        pc.onicecandidate = (e) => e.candidate && signal(fromUserId, 'candidate', { to: 'presenter', c: e.candidate.toJSON() });
+        pc.ontrack = (e) => {
+          const stream = e.streams[0];
+          if (!stream) return;
+          setRemoteScreenStreams((prev) => new Map(prev).set(fromUserId, stream));
         };
-
-        pc.ontrack = (event) => {
-          const [remoteStream] = event.streams;
-          if (remoteStream) {
-            setRemoteScreenStreams((prev) => {
-              const next = new Map(prev);
-              next.set(senderUserId, remoteStream);
-              return next;
-            });
-          }
+        pc.onconnectionstatechange = () => {
+          if (['failed', 'closed'].includes(pc.connectionState)) clearRemote(fromUserId);
         };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        await drainIce('viewer', fromUserId, pc);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-
-        socket.emit(SOCKET_EVENTS.SCREEN_ANSWER, {
-          targetUserId: senderUserId,
-          channelId,
-          answer
-        });
-      } catch (err) {
-        console.error('Error answering screen offer:', err);
-      }
-    });
-
-    // Handle incoming Screen Answer
-    socket.on(SOCKET_EVENTS.SCREEN_ANSWER, async ({ senderUserId, answer }) => {
-      try {
-        const pc = screenPeerConnectionsRef.current.get(senderUserId);
-        if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        signal(fromUserId, 'answer', { type: answer.type, sdp: answer.sdp });
+      } else if (type === 'candidate') {
+        if (data?.to === 'viewer') {
+          await addIce('viewer', fromUserId, fromPresenterRef.current.get(fromUserId), data.c);
+        } else if (data?.to === 'presenter') {
+          await addIce('presenter', fromUserId, toViewersRef.current.get(fromUserId), data.c);
         }
-      } catch (err) {
-        console.error('Error handling screen answer:', err);
+      } else if (type === 'screen_stopped') {
+        clearRemote(fromUserId);
+        setWatching((current) => (current?.userId === fromUserId ? null : current));
+      }
+    } catch (err) {
+      logWarn(`screen signal ${type}`, err);
+    }
+  };
+  const handleSignalRef = useRef(handleSignal);
+  handleSignalRef.current = handleSignal;
+
+  useEffect(() => {
+    if (!userId || !activeVoiceChannel?.id) return undefined;
+    return listenToScreenSignals(userId, (sig) => handleSignalRef.current(sig));
+  }, [userId, activeVoiceChannel?.id]);
+
+  // Presenter stopped or left the room: drop the stream I was watching.
+  useEffect(() => {
+    if (watching && !presenters.some((p) => p.userId === watching.userId)) {
+      const timer = setTimeout(() => {
+        clearRemote(watching.userId);
+        setWatching(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [watching, presenters, clearRemote]);
+
+  // Viewers who left the room no longer need my stream.
+  useEffect(() => {
+    const ids = new Set(voiceUsers.map((u) => u.userId));
+    toViewersRef.current.forEach((pc, viewerId) => {
+      if (!ids.has(viewerId)) {
+        pc.close();
+        toViewersRef.current.delete(viewerId);
       }
     });
+  }, [voiceUsers]);
 
-    // Handle incoming Screen ICE Candidate
-    socket.on(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE, async ({ senderUserId, candidate }) => {
-      try {
-        const pc = screenPeerConnectionsRef.current.get(senderUserId);
-        if (pc && candidate) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-      } catch (err) {
-        console.warn('Error adding screen ICE candidate:', err);
-      }
-    });
-
-    return () => {
-      socket.off(SOCKET_EVENTS.SCREEN_STARTED);
-      socket.off(SOCKET_EVENTS.SCREEN_STOPPED);
-      socket.off(SOCKET_EVENTS.SCREEN_OFFER);
-      socket.off(SOCKET_EVENTS.SCREEN_ANSWER);
-      socket.off(SOCKET_EVENTS.SCREEN_ICE_CANDIDATE);
-    };
-  }, [socket, activePresenter]);
+  // Leaving voice ends sharing and watching.
+  useEffect(() => {
+    if (activeVoiceChannel) return;
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+      setLocalScreenStream(null);
+      setIsScreenSharing(false);
+    }
+    toViewersRef.current.forEach((pc) => pc.close());
+    toViewersRef.current.clear();
+    fromPresenterRef.current.forEach((pc) => pc.close());
+    fromPresenterRef.current.clear();
+    setRemoteScreenStreams(new Map());
+    setWatching(null);
+  }, [activeVoiceChannel]);
 
   return (
     <ScreenShareContext.Provider
@@ -560,14 +320,18 @@ export function ScreenShareProvider({ children }) {
         remoteScreenStreams,
         screenQuality,
         screenFps,
+        includeAudio,
         isPickerOpen,
         activePresenter,
+        presenters,
         setScreenQuality,
         setScreenFps,
+        setIncludeAudio,
         setIsPickerOpen,
         startScreenShare,
         stopScreenShare,
         watchStream,
+        stopWatching,
         setActivePresenter
       }}
     >

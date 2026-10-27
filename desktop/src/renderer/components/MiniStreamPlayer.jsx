@@ -7,7 +7,7 @@ import { Maximize2, X, Radio, Volume2 } from 'lucide-react';
 
 export default function MiniStreamPlayer() {
   const { user } = useAuth();
-  const { activeVoiceChannel, joinVoice } = useVoice();
+  const { activeVoiceChannel } = useVoice();
   const { activeChannel, setActiveChannel } = useServer();
   const { 
     isScreenSharing, 
@@ -46,7 +46,7 @@ export default function MiniStreamPlayer() {
       videoEl.play().catch(() => {});
     } else {
       videoEl.srcObject = null;
-      try { videoEl.load(); } catch (e) {}
+      videoEl.load();
     }
   }, [hasStream, isViewingTextChannel, isPresenter, localScreenStream, activePresenter, remoteScreenStreams]);
 
@@ -88,7 +88,7 @@ export default function MiniStreamPlayer() {
           ref={videoRef} 
           autoPlay 
           playsInline 
-          muted 
+          muted={isPresenter}
           style={{
             width: '100%',
             height: '100%',

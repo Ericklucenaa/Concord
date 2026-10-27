@@ -1,29 +1,40 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+function subscribe(channel, callback) {
+  const listener = (_event, data) => callback(data);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
   platform: process.platform,
 
-  // Window Controls
+  // Window controls
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  applySettings: (settings) => ipcRenderer.invoke('app:apply-settings', settings),
+  onInviteLink: (callback) => subscribe('app:invite-link', callback),
 
-  // Screen Share Native Sources
+  // Screen share
   getDesktopSources: () => ipcRenderer.invoke('desktop:get-sources'),
+  selectScreenSource: (choice) => ipcRenderer.invoke('screen:select-source', choice),
 
-  // Native Google OAuth for Desktop App
+  // Global push-to-talk
+  onPushToTalk: (callback) => subscribe('ptt:state', callback),
+
+  // Link previews
+  fetchLinkPreview: (url) => ipcRenderer.invoke('link:preview', url),
+
+  // Google sign-in (returns the OAuth credential)
   signInWithGoogleNative: () => ipcRenderer.invoke('auth:google-login'),
 
-  // Open external URL in system browser
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
 
-  // Auto Updater
+  // Auto updater
   downloadAndInstallUpdate: (data) => ipcRenderer.invoke('updater:download-and-install', data),
-  onUpdateProgress: (callback) => {
-    const listener = (_, data) => callback(data);
-    ipcRenderer.on('updater:progress', listener);
-    return () => ipcRenderer.removeListener('updater:progress', listener);
-  }
+  onUpdateProgress: (callback) => subscribe('updater:progress', callback)
 });

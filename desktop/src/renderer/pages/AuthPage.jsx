@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { signInWithGoogle, resetPasswordWithEmail } from '../services/firebase';
-import { Radio, Lock, Mail, User, ArrowRight, ArrowLeft, KeyRound } from 'lucide-react';
+import { getGoogleOAuthCredential, resetPasswordWithEmail } from '../services/firebase';
+import { Radio, Lock, Mail, User, ArrowRight, ArrowLeft } from 'lucide-react';
 
 export default function AuthPage() {
   const { login, register, loginGoogle } = useAuth();
@@ -84,50 +84,45 @@ export default function AuthPage() {
     }
   };
 
-  const [isBridgeMode, setIsBridgeMode] = useState(false);
 
-  // Handle Electron Desktop Google OAuth Bridge
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const isBridge = window.location.search.includes('mode=desktop_google_auth');
-    if (isBridge) {
-      setIsBridgeMode(true);
-      const runBridge = async () => {
-        try {
-          setIsLoading(true);
-          const googleUser = await signInWithGoogle();
-          if (googleUser) {
-            const encoded = encodeURIComponent(JSON.stringify(googleUser));
-            window.location.href = `https://concord-3af70.web.app/?google_auth_success=${encoded}`;
-          }
-        } catch (err) {
-          setError(err.message || 'Erro ao autenticar com o Google.');
-        } finally {
-          setIsLoading(false);
-        }
-      };
-      runBridge();
-    }
-  }, []);
-
-  const handleGoogleSignIn = async () => {
+  // Google sign-in bridge for the desktop app. This page runs inside a window
+  // opened by the Electron main process; it signs in with a popup and hands the
+  // Google OAuth credential back through the URL *hash* (never sent to a
+  // server). The desktop renderer then signs in to Firebase with it.
+  const isBridge = typeof window !== 'undefined' && window.location.search.includes('mode=desktop_google_auth');
+  const runBridge = async () => {
     try {
       setIsLoading(true);
       setError('');
-      const googleUser = await signInWithGoogle();
-      if (googleUser) {
-        await loginGoogle(googleUser);
-      }
+      const credential = await getGoogleOAuthCredential();
+      window.location.hash = `google_auth_success=${encodeURIComponent(JSON.stringify(credential))}`;
     } catch (err) {
-      console.error('Google sign-in error:', err);
-      if (err.code === 'auth/unauthorized-domain' || (err.message && err.message.toLowerCase().includes('unauthorized'))) {
-        setError('O login do Google via pop-up requer domínio web. No aplicativo Desktop instalado, faça login ou cadastre-se abaixo usando seu @Apelido/E-mail e Senha!');
-      } else if (
-        err.code !== 'auth/popup-closed-by-user' && 
-        err.code !== 'auth/cancelled-popup-request'
-      ) {
-        setError(err.message || 'Erro ao autenticar com a conta do Google.');
+      if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+        setError(err.message || 'Erro ao autenticar com o Google.');
       }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isBridge) {
+      runBridge();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleGoogleSignIn = async () => {
+    if (isBridge) {
+      runBridge();
+      return;
+    }
+    try {
+      setIsLoading(true);
+      setError('');
+      await loginGoogle();
+    } catch (err) {
+      setError(err.message || 'Erro ao autenticar com a conta do Google.');
     } finally {
       setIsLoading(false);
     }

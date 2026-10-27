@@ -1,33 +1,36 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { compressImage } from '../../services/cloud/attachments';
+import { AppSettingsPanel, VoiceModeSettings } from './SettingsPanels';
+
+const EXPIRY_OPTIONS = { '30m': 30 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, today: 24 * 60 * 60_000 };
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import { useVoice } from '../../context/VoiceContext';
-import { 
-  X, 
-  User, 
-  Mic, 
-  Volume2, 
-  Moon, 
-  Sun, 
-  LogOut, 
-  ShieldCheck, 
-  KeyRound, 
+import {
+  X,
+  User,
+  Mic,
+  Volume2,
+  Moon,
+  LogOut,
+  ShieldCheck,
+  KeyRound,
   Save,
   Check,
   Copy,
   Upload,
   Camera,
   RefreshCw,
-  Image as ImageIcon,
   Sparkles,
-  Sliders
+  Sliders,
+  Bell
 } from 'lucide-react';
 import { USER_STATUS } from '@shared/constants';
 import { useNotification } from '../../context/NotificationContext';
 
 export default function SettingsModal() {
   const { modalState, closeModal } = useServer();
-  const { user, updateProfile, logout } = useAuth();
+  const { user, updateProfile, changePassword, logout } = useAuth();
   const { showSuccess, showError, showToast } = useNotification();
   const { 
     inputDevices, 
@@ -41,13 +44,11 @@ export default function SettingsModal() {
     noiseSuppression,
     echoCancellation,
     autoGainControl,
-    noiseGateEnabled,
     automaticSensitivity,
     noiseGateThreshold,
     updateNoiseSuppression,
     updateEchoCancellation,
     updateAutoGainControl,
-    updateNoiseGateEnabled,
     updateAutomaticSensitivity,
     updateNoiseGateThreshold
   } = useVoice();
@@ -56,7 +57,9 @@ export default function SettingsModal() {
   const [username, setUsername] = useState(user?.username || '');
   const [copiedNickname, setCopiedNickname] = useState(false);
   const [status, setStatus] = useState(user?.status || USER_STATUS.ONLINE);
-  const [customStatus, setCustomStatus] = useState(user?.customStatus || '');
+  const [customText, setCustomText] = useState(user?.customStatus?.text || '');
+  const [customEmoji, setCustomEmoji] = useState(user?.customStatus?.emoji || '');
+  const [customExpiry, setCustomExpiry] = useState('never');
   const [avatarPreview, setAvatarPreview] = useState(user?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.username || 'user'}`);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -196,7 +199,7 @@ export default function SettingsModal() {
       osc3.stop(ctx.currentTime + 0.85);
 
       setTimeout(() => setIsPlayingSoundTest(false), 900);
-    } catch (e) {
+    } catch {
       setIsPlayingSoundTest(false);
     }
   };
@@ -205,16 +208,11 @@ export default function SettingsModal() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError('A foto de perfil deve ter no máximo 5MB.');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setAvatarPreview(event.target?.result);
-    };
-    reader.readAsDataURL(file);
+    // The avatar is stored on the profile document, so keep it small.
+    compressImage(file, { maxDim: 256, quality: 0.9 })
+      .then(setAvatarPreview)
+      .catch(() => setError('Não foi possível ler esta imagem (GIFs animados não são suportados como foto).'));
+    e.target.value = '';
   };
 
   const handleRandomAvatar = () => {
@@ -242,14 +240,16 @@ export default function SettingsModal() {
         return;
       }
 
+      const expiresAt = EXPIRY_OPTIONS[customExpiry] ? new Date(Date.now() + EXPIRY_OPTIONS[customExpiry]).toISOString() : null;
       await updateProfile({
         username: cleanUser,
-        userTag,
         avatar: avatarPreview,
         status,
-        customStatus: customStatus.trim(),
-        ...(newPassword ? { currentPassword, newPassword } : {})
+        customStatus: customText.trim() || customEmoji.trim()
+          ? { text: customText.trim().slice(0, 80), emoji: customEmoji.trim().slice(0, 8), expiresAt }
+          : null
       });
+      if (newPassword) await changePassword(currentPassword, newPassword);
 
       setSaveSuccess(true);
       setCurrentPassword('');
@@ -311,6 +311,15 @@ export default function SettingsModal() {
               Aparência
             </button>
 
+            <button 
+              className={`btn ${activeTab === 'app' ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ justifyContent: 'flex-start', border: 'none', padding: '8px 12px' }}
+              onClick={() => setActiveTab('app')}
+            >
+              <Bell size={16} />
+              Notificações & App
+            </button>
+
             <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: 8 }}>
               <button 
                 className="btn btn-danger"
@@ -333,6 +342,7 @@ export default function SettingsModal() {
                 {activeTab === 'account' && 'Minha Conta'}
                 {activeTab === 'audio' && 'Configurações de Áudio & Microfone'}
                 {activeTab === 'appearance' && 'Aparência & Personalização'}
+                {activeTab === 'app' && 'Notificações & Aplicativo'}
               </h3>
               <button className="icon-btn" onClick={() => closeModal('settings')}>
                 <X size={18} />
@@ -464,15 +474,35 @@ export default function SettingsModal() {
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Status Personalizado / Atividade</label>
-                    <input 
-                      type="text" 
-                      className="form-input" 
-                      placeholder="ex: Trabalhando, Estudando, Ouvindo música, Disponível, Em reunião..." 
-                      value={customStatus} 
-                      onChange={(e) => setCustomStatus(e.target.value)}
-                      maxLength={60}
-                    />
+                    <label className="form-label">Status personalizado</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        type="text"
+                        className="form-input"
+                        style={{ width: 56, textAlign: 'center' }}
+                        placeholder="🎮"
+                        value={customEmoji}
+                        onChange={(e) => setCustomEmoji(e.target.value)}
+                        maxLength={8}
+                        title="Emoji do status"
+                      />
+                      <input 
+                        type="text" 
+                        className="form-input" 
+                        style={{ flex: 1 }}
+                        placeholder="ex: Jogando, Estudando, Ausente até 14h…" 
+                        value={customText} 
+                        onChange={(e) => setCustomText(e.target.value)}
+                        maxLength={80}
+                      />
+                      <select className="form-select" value={customExpiry} onChange={(e) => setCustomExpiry(e.target.value)} title="Limpar após">
+                        <option value="never">Não limpar</option>
+                        <option value="30m">30 minutos</option>
+                        <option value="1h">1 hora</option>
+                        <option value="4h">4 horas</option>
+                        <option value="today">24 horas</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div className="form-group">
@@ -485,7 +515,7 @@ export default function SettingsModal() {
                       <option value={USER_STATUS.ONLINE}>🟢 Online</option>
                       <option value={USER_STATUS.IDLE}>🟡 Ausente</option>
                       <option value={USER_STATUS.DND}>🔴 Não Perturbe</option>
-                      <option value={USER_STATUS.OFFLINE}>⚪ Invisível</option>
+                      <option value="invisible">⚪ Invisível</option>
                     </select>
                   </div>
 
@@ -530,8 +560,11 @@ export default function SettingsModal() {
               )}
 
               {/* AUDIO & VOICE TAB */}
+              {activeTab === 'app' && <AppSettingsPanel />}
+
               {activeTab === 'audio' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <VoiceModeSettings />
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     <div>
                       <div style={{ fontWeight: 700, fontSize: 13 }}>Detectar Dispositivos de Áudio do Sistema</div>

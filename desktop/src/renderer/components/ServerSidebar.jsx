@@ -6,14 +6,14 @@ import {
   Plus, 
   Mail, 
   Settings, 
-  Image as ImageIcon, 
   UserPlus, 
   Trash2, 
   LogOut, 
   FolderPlus 
 } from 'lucide-react';
-import { ROLES } from '@shared/constants';
 import { useNotification } from '../context/NotificationContext';
+import { useUnread } from '../context/UnreadContext';
+import { isAdmin } from '../services/permissions';
 
 export default function ServerSidebar() {
   const { showConfirm } = useNotification();
@@ -27,6 +27,7 @@ export default function ServerSidebar() {
     leaveServer 
   } = useServer();
   const { user } = useAuth();
+  const { serverSummary, unreadThreadCount } = useUnread();
 
   const [contextMenu, setContextMenu] = useState(null); // { server, x, y }
 
@@ -51,7 +52,7 @@ export default function ServerSidebar() {
     });
   };
 
-  const isOwner = (server) => server?.ownerId === user?.id || server?.role === ROLES.OWNER || server?.role === 'owner';
+  const isOwner = (server) => server?.ownerId === user?.id;
 
   const handleDeleteServer = async (server) => {
     const confirmed = await showConfirm(
@@ -89,6 +90,7 @@ export default function ServerSidebar() {
           style={{ backgroundColor: !activeServer ? 'var(--accent-primary)' : 'var(--bg-secondary)', color: !activeServer ? '#fff' : 'var(--accent-primary)' }}
         >
           <Compass size={24} />
+          {unreadThreadCount > 0 && <span className="badge-counter">{unreadThreadCount}</span>}
         </button>
       </div>
 
@@ -115,11 +117,12 @@ export default function ServerSidebar() {
       {servers.map((server) => {
         const isActive = activeServer?.id === server.id;
         const initials = server.name.substring(0, 2).toUpperCase();
+        const { unread, mentionCount } = serverSummary(server);
 
         return (
           <div 
             key={server.id} 
-            className={`server-icon-wrapper ${isActive ? 'active' : ''}`}
+            className={`server-icon-wrapper ${isActive ? 'active' : ''} ${unread && !isActive ? 'unread' : ''}`}
             title={`${server.name} (Clique com botão direito para opções)`}
             onContextMenu={(e) => handleContextMenu(e, server)}
           >
@@ -133,6 +136,7 @@ export default function ServerSidebar() {
               ) : (
                 <span>{initials}</span>
               )}
+              {mentionCount > 0 && <span className="badge-counter">{mentionCount}</span>}
             </button>
           </div>
         );
@@ -175,23 +179,16 @@ export default function ServerSidebar() {
             {contextMenu.server.name}
           </div>
 
-          <button 
-            className="dropdown-item btn-secondary" 
-            style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-            onClick={() => { setContextMenu(null); openModal('serverSettings'); }}
-          >
-            <Settings size={15} style={{ color: 'var(--accent-primary)' }} />
-            Configurações do Servidor
-          </button>
-
-          <button 
-            className="dropdown-item btn-secondary" 
-            style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-            onClick={() => { setContextMenu(null); openModal('serverSettings'); }}
-          >
-            <ImageIcon size={15} style={{ color: 'var(--accent-primary)' }} />
-            Trocar Foto / Nome
-          </button>
+          {isAdmin(contextMenu.server, user?.id) && (
+            <button 
+              className="dropdown-item btn-secondary" 
+              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
+              onClick={() => { setContextMenu(null); openModal('serverSettings'); }}
+            >
+              <Settings size={15} style={{ color: 'var(--accent-primary)' }} />
+              Configurações do Servidor
+            </button>
+          )}
 
           <button 
             className="dropdown-item btn-secondary" 
@@ -202,14 +199,16 @@ export default function ServerSidebar() {
             Convidar Pessoas
           </button>
 
-          <button 
-            className="dropdown-item btn-secondary" 
-            style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-            onClick={() => { setContextMenu(null); openModal('createChannel'); }}
-          >
-            <FolderPlus size={15} />
-            Criar Canal
-          </button>
+          {isAdmin(contextMenu.server, user?.id) && (
+            <button 
+              className="dropdown-item btn-secondary" 
+              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
+              onClick={() => { setContextMenu(null); openModal('createChannel'); }}
+            >
+              <FolderPlus size={15} />
+              Criar Canal
+            </button>
+          )}
 
           <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
 

@@ -13,7 +13,7 @@ export async function requestNotificationPermission() {
     try {
       const result = await Notification.requestPermission();
       return result === 'granted';
-    } catch (e) {
+    } catch {
       return false;
     }
   }
@@ -48,7 +48,7 @@ export function showNativeNotification(title, { body = '', icon = '', onClick = 
 
     // Auto-dismiss after 6 seconds
     setTimeout(() => {
-      try { notification.close(); } catch (e) {}
+      notification.close();
     }, 6000);
   } catch (err) {
     console.warn('Native notification error:', err);

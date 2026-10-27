@@ -13,20 +13,21 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    strictPort: true,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:4000',
-        changeOrigin: true
-      },
-      '/socket.io': {
-        target: 'http://localhost:4000',
-        ws: true
-      }
-    }
+    strictPort: true
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Vendor code changes rarely; separate chunks stay cached between releases.
+        manualChunks: {
+          firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          react: ['react', 'react-dom'],
+          icons: ['lucide-react']
+        }
+      }
+    },
+    chunkSizeWarningLimit: 700
   }
 });

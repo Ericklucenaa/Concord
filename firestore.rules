@@ -2,97 +2,423 @@ rules_version = '2';
 
 // Concord Firestore security rules.
 //
-// Previously every collection used `allow read, write: if true`, which exposed
-// the entire database (profiles, private DMs, invites, friends) to anonymous
-// read AND write by anyone with the public Firebase config. These rules require
-// authentication for all app data, lock the auto-update manifest to read-only,
-// and give users write access only to their own profile document.
+// Access model:
+//   * Servers keep `memberIds` (for queries) and a `roles` map (uid -> role).
+//     Membership and roles are checked server-side here, never trusted from
+//     the client. Ownership is `ownerId`, not the role string.
+//   * Channel messages carry `serverId` so every read/write can be checked
+//     against the server's membership and per-channel permissions.
+//   * DMs (1-on-1 and groups) live in threads with an explicit participant list.
+//   * Anything not matched below is denied.
 //
-// NOTE (recommended next step): tighten the broad `if signedIn()` collections
-// below to per-document ownership/membership checks (e.g. a message can only be
-// written by its author, a server doc only by its members/owner).
+// Covered by tests in desktop/tests/rules.test.js (Firestore emulator).
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------
 
     function signedIn() {
       return request.auth != null;
     }
 
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+    function uid() {
+      return request.auth.uid;
     }
 
-    // User profiles: any signed-in user can read; only the owner writes their own doc.
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    function serverDoc(serverId) {
+      return get(/databases/$(database)/documents/concord_servers/$(serverId)).data;
+    }
+
+    function threadDoc(threadId) {
+      return get(/databases/$(database)/documents/concord_dm_threads/$(threadId)).data;
+    }
+
+    function roleIn(s) {
+      return s.roles.get(uid(), null);
+    }
+
+    function isMemberOf(s) {
+      return signedIn() && uid() in s.memberIds;
+    }
+
+    function isOwnerOf(s) {
+      return signedIn() && s.ownerId == uid();
+    }
+
+    function isAdminOf(s) {
+      return isOwnerOf(s) || (isMemberOf(s) && roleIn(s) == 'admin');
+    }
+
+    function isModOf(s) {
+      return isAdminOf(s) || (isMemberOf(s) && roleIn(s) == 'moderator');
+    }
+
+    // A channel listed in `channelRoles` is only visible to those roles (plus admins).
+    function canViewChannel(s, channelId) {
+      return isMemberOf(s) && (
+        !(channelId in s.get('channelRoles', {}))
+        || isAdminOf(s)
+        || roleIn(s) in s.channelRoles[channelId]
+      );
+    }
+
+    // Read-only channels accept posts from moderators and above only.
+    function canPostInChannel(s, channelId) {
+      return canViewChannel(s, channelId) && (
+        s.get('readOnlyChannels', {}).get(channelId, false) != true
+        || isModOf(s)
+      );
+    }
+
+    function isParticipant(t) {
+      return signedIn() && uid() in t.participants;
+    }
+
+    function otherParticipant(t) {
+      return t.participants[0] == uid() ? t.participants[1] : t.participants[0];
+    }
+
+    // The other side of a 1-on-1 conversation has not blocked me.
+    function notBlockedIn(t) {
+      return t.isGroup == true
+        || !exists(/databases/$(database)/documents/concord_blocks/$(otherParticipant(t)))
+        || !(uid() in get(/databases/$(database)/documents/concord_blocks/$(otherParticipant(t))).data.blockedIds);
+    }
+
+    function canAccessScope(scopeType, scopeId) {
+      return (scopeType == 'server' && isMemberOf(serverDoc(scopeId)))
+        || (scopeType == 'dm' && isParticipant(threadDoc(scopeId)));
+    }
+
+    // ---------------------------------------------------------------------
+    // Users & nicknames
+    // ---------------------------------------------------------------------
+
     match /concord_users/{userId} {
       allow read: if signedIn();
-      allow write: if isOwner(userId);
+      allow create, update: if signedIn() && uid() == userId && incoming().id == userId;
+      allow delete: if false;
     }
 
-    // Nickname registry (doc id = nickname) for uniqueness/lookup.
+    // Nickname registry (doc id = lowercase nickname). Readable by id before
+    // login (username login), never listable, and only the holder can change it.
     match /concord_nicknames/{nickname} {
-      allow read: if signedIn();
-      allow write: if signedIn();
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && incoming().userId == uid()
+        && nickname == nickname.lower();
+      allow update: if signedIn() && resource.data.userId == uid() && incoming().userId == uid();
+      allow delete: if signedIn() && resource.data.userId == uid();
     }
 
-    // Servers & Channels
+    match /concord_blocks/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    match /concord_read_states/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    // ---------------------------------------------------------------------
+    // Servers
+    // ---------------------------------------------------------------------
+
+    function isValidNewServer() {
+      return incoming().ownerId == uid()
+        && incoming().memberIds == [uid()]
+        && incoming().roles.keys().hasOnly([uid()])
+        && incoming().roles[uid()] == 'owner';
+    }
+
+    // Joining requires an existing invite code for this exact server.
+    function isValidJoin(serverId) {
+      return !(uid() in resource.data.memberIds)
+        && !(uid() in resource.data.get('bannedIds', []))
+        && changedKeys().hasOnly(['memberIds', 'roles', 'lastJoinCode', 'updatedAt'])
+        && incoming().memberIds.toSet() == resource.data.memberIds.toSet().union([uid()].toSet())
+        && incoming().roles.diff(resource.data.roles).affectedKeys() == [uid()].toSet()
+        && incoming().roles[uid()] == 'member'
+        && get(/databases/$(database)/documents/concord_invites/$(incoming().lastJoinCode)).data.serverId == serverId;
+    }
+
+    function isValidLeave() {
+      return uid() in resource.data.memberIds
+        && resource.data.ownerId != uid()
+        && changedKeys().hasOnly(['memberIds', 'roles', 'updatedAt'])
+        && incoming().memberIds.toSet() == resource.data.memberIds.toSet().difference([uid()].toSet())
+        && incoming().roles.diff(resource.data.roles).affectedKeys() == [uid()].toSet()
+        && !(uid() in incoming().roles);
+    }
+
+    // Admins may manage everything except ownership; the owner stays a member.
+    function isValidAdminEdit() {
+      return isAdminOf(resource.data)
+        && !changedKeys().hasAny(['ownerId'])
+        && resource.data.ownerId in incoming().memberIds
+        && incoming().roles[resource.data.ownerId] == 'owner';
+    }
+
+    // Owner may also transfer ownership to another member.
+    function isValidOwnerEdit() {
+      return isOwnerOf(resource.data)
+        && incoming().ownerId in incoming().memberIds
+        && incoming().roles[incoming().ownerId] == 'owner';
+    }
+
     match /concord_servers/{serverId} {
-      allow read, write: if signedIn();
+      allow read: if signedIn() && uid() in resource.data.memberIds;
+      allow create: if signedIn() && isValidNewServer();
+      allow update: if signedIn() && (
+        isValidJoin(serverId)
+        || isValidLeave()
+        || isValidOwnerEdit()
+        || isValidAdminEdit()
+        || (isModOf(resource.data) && changedKeys().hasOnly(['mutedIds', 'updatedAt']))
+      );
+      allow delete: if isOwnerOf(resource.data);
     }
 
-    // Public & Code Invites
+    // Invite codes: readable by id so anyone with the link can preview/join.
     match /concord_invites/{code} {
-      allow read, write: if signedIn();
+      allow get: if signedIn();
+      allow list: if signedIn() && resource.data.creatorId == uid();
+      allow create: if signedIn()
+        && incoming().creatorId == uid()
+        && incoming().code == code
+        && isMemberOf(serverDoc(incoming().serverId));
+      allow update: if false;
+      allow delete: if signedIn() && (
+        resource.data.creatorId == uid() || isAdminOf(serverDoc(resource.data.serverId))
+      );
     }
 
-    // User Targeted Direct Invites (Inbox)
+    // Invites sent directly to a user's inbox.
     match /concord_user_invites/{inviteId} {
-      allow read, write: if signedIn();
+      allow read: if signedIn() && (resource.data.receiverId == uid() || resource.data.senderId == uid());
+      allow create: if signedIn()
+        && incoming().senderId == uid()
+        && isMemberOf(serverDoc(incoming().serverId))
+        && exists(/databases/$(database)/documents/concord_invites/$(incoming().code));
+      allow update: if signedIn()
+        && resource.data.receiverId == uid()
+        && changedKeys().hasOnly(['status', 'respondedAt']);
+      allow delete: if signedIn() && (resource.data.receiverId == uid() || resource.data.senderId == uid());
     }
 
-    // Messages in text channels
+    // Moderation log: written by moderators, read by moderators.
+    match /concord_audit/{entryId} {
+      allow read: if isModOf(serverDoc(resource.data.serverId));
+      allow create: if signedIn()
+        && incoming().actorId == uid()
+        && isModOf(serverDoc(incoming().serverId));
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // Channel messages, activity, mentions, typing
+    // ---------------------------------------------------------------------
+
     match /concord_messages/{messageId} {
-      allow read, write: if signedIn();
+      allow read: if signedIn() && canViewChannel(serverDoc(resource.data.serverId), resource.data.channelId);
+
+      allow create: if signedIn()
+        && incoming().userId == uid()
+        && incoming().get('pinned', false) == false
+        && canPostInChannel(serverDoc(incoming().serverId), incoming().channelId);
+
+      allow update: if signedIn() && (
+        // Author edits their own text.
+        (resource.data.userId == uid()
+          && changedKeys().hasOnly(['content', 'editedAt', 'mentions', 'mentionEveryone']))
+        // Any member who can see the channel may react.
+        || (changedKeys().hasOnly(['reactions'])
+          && canViewChannel(serverDoc(resource.data.serverId), resource.data.channelId))
+        // Moderators pin/unpin.
+        || (changedKeys().hasOnly(['pinned', 'pinnedBy', 'pinnedAt'])
+          && isModOf(serverDoc(resource.data.serverId)))
+      );
+
+      allow delete: if signedIn() && (
+        resource.data.userId == uid() || isModOf(serverDoc(resource.data.serverId))
+      );
     }
 
-    // Direct Messages (1-on-1 private chat)
+    // Last-activity marker per channel, used for unread indicators.
+    match /concord_channel_activity/{channelId} {
+      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow create: if signedIn()
+        && incoming().channelId == channelId
+        && canPostInChannel(serverDoc(incoming().serverId), channelId);
+      allow update: if signedIn()
+        && incoming().serverId == resource.data.serverId
+        && incoming().channelId == channelId
+        && canPostInChannel(serverDoc(resource.data.serverId), channelId);
+    }
+
+    match /concord_mentions/{mentionId} {
+      allow read, delete: if signedIn() && resource.data.targetId == uid();
+      allow create: if signedIn()
+        && incoming().authorId == uid()
+        && isMemberOf(serverDoc(incoming().serverId))
+        && incoming().targetId in serverDoc(incoming().serverId).memberIds;
+    }
+
+    // Typing indicators (doc id = "<scopeKey>_<uid>").
+    match /concord_typing/{typingId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && incoming().userId == uid()
+        && typingId == incoming().scopeKey + '_' + uid();
+      allow delete: if signedIn() && resource.data.userId == uid();
+    }
+
+    // ---------------------------------------------------------------------
+    // Direct messages (1-on-1 and groups)
+    // ---------------------------------------------------------------------
+
+    function isValidNewThread(threadId) {
+      return uid() in incoming().participants
+        && incoming().participants.size() >= 2
+        && incoming().participants.size() <= 10
+        && (
+          (incoming().isGroup == false
+            && incoming().participants.size() == 2
+            && incoming().participants[0] < incoming().participants[1]
+            && threadId == 'dm_' + incoming().participants[0] + '_' + incoming().participants[1])
+          || (incoming().isGroup == true
+            && incoming().ownerId == uid()
+            && threadId.matches('grp_[A-Za-z0-9_-]+'))
+        );
+    }
+
+    match /concord_dm_threads/{threadId} {
+      allow read: if isParticipant(resource.data);
+      allow create: if signedIn() && isValidNewThread(threadId);
+      allow update: if isParticipant(resource.data) && (
+        changedKeys().hasOnly(['lastMessageAt', 'lastMessageBy', 'lastPreview', 'updatedAt'])
+        // The group owner manages members/name and may hand the group over.
+        || (resource.data.isGroup == true && resource.data.ownerId == uid()
+          && incoming().participants.size() <= 10
+          && incoming().ownerId in incoming().participants)
+        || (resource.data.isGroup == true
+          && changedKeys().hasOnly(['participants', 'updatedAt'])
+          && incoming().participants.toSet() == resource.data.participants.toSet().difference([uid()].toSet()))
+      );
+      allow delete: if signedIn() && resource.data.isGroup == true && resource.data.ownerId == uid();
+    }
+
     match /concord_direct_messages/{messageId} {
-      allow read, write: if signedIn();
+      allow read: if signedIn() && isParticipant(threadDoc(resource.data.dmId));
+      allow create: if signedIn()
+        && incoming().senderId == uid()
+        && isParticipant(threadDoc(incoming().dmId))
+        && notBlockedIn(threadDoc(incoming().dmId));
+      allow update: if signedIn() && (
+        (resource.data.senderId == uid() && changedKeys().hasOnly(['content', 'editedAt']))
+        || (changedKeys().hasOnly(['reactions']) && isParticipant(threadDoc(resource.data.dmId)))
+      );
+      allow delete: if signedIn() && resource.data.senderId == uid();
     }
 
-    // Friendships & Friend Requests
-    match /concord_friends/{friendId} {
-      allow read, write: if signedIn();
+    // ---------------------------------------------------------------------
+    // Friends (doc id = "<smallerUid>_<largerUid>")
+    // ---------------------------------------------------------------------
+
+    match /concord_friends/{pairId} {
+      allow read: if isParticipant(resource.data);
+      allow create: if signedIn()
+        && incoming().requesterId == uid()
+        && uid() in incoming().participants
+        && incoming().participants.size() == 2
+        && incoming().participants[0] < incoming().participants[1]
+        && pairId == incoming().participants[0] + '_' + incoming().participants[1]
+        && incoming().status == 'pending';
+      allow update: if isParticipant(resource.data)
+        && resource.data.status == 'pending'
+        && incoming().status == 'accepted'
+        && resource.data.requesterId != uid()
+        && changedKeys().hasOnly(['status', 'profiles', 'updatedAt']);
+      allow delete: if isParticipant(resource.data);
     }
 
-    // Realtime Voice Room Presence
-    match /concord_voice_rooms/{roomId} {
-      allow read, write: if signedIn();
+    // ---------------------------------------------------------------------
+    // Attachments (chunked files, max 8 MB)
+    // ---------------------------------------------------------------------
+
+    match /concord_attachments/{attachmentId} {
+      allow read: if signedIn() && canAccessScope(resource.data.scopeType, resource.data.scopeId);
+      allow create: if signedIn()
+        && incoming().ownerId == uid()
+        && incoming().size <= 8 * 1024 * 1024
+        && incoming().chunkCount <= 12
+        && canAccessScope(incoming().scopeType, incoming().scopeId);
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.ownerId == uid();
+
+      match /chunks/{chunkId} {
+        function parent() {
+          return get(/databases/$(database)/documents/concord_attachments/$(attachmentId)).data;
+        }
+        allow read: if signedIn() && canAccessScope(parent().scopeType, parent().scopeId);
+        allow create: if signedIn() && parent().ownerId == uid();
+        allow delete: if signedIn() && parent().ownerId == uid();
+      }
     }
 
-    // Realtime WebRTC Screen and Voice Signaling
-    match /concord_screen_signals/{signalId} {
-      allow read, write: if signedIn();
+    // ---------------------------------------------------------------------
+    // Voice, screen share and soundboard
+    // ---------------------------------------------------------------------
+
+    // One presence doc per user (doc id = uid), pointing at the voice channel.
+    match /concord_voice_presence/{userId} {
+      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow create, update: if signedIn()
+        && uid() == userId
+        && incoming().userId == uid()
+        && isMemberOf(serverDoc(incoming().serverId));
+      allow delete: if signedIn() && (uid() == userId || isModOf(serverDoc(resource.data.serverId)));
     }
+
     match /concord_voice_signals/{signalId} {
-      allow read, write: if signedIn();
-    }
-    match /concord_soundboard/{soundId} {
-      allow read, write: if signedIn();
+      allow create: if signedIn() && incoming().senderId == uid();
+      allow read: if signedIn() && resource.data.targetId == uid();
+      allow delete: if signedIn() && (resource.data.targetId == uid() || resource.data.senderId == uid());
     }
 
-    // Auto-update manifest: readable by anyone (checked before login), but NEVER
-    // writable by clients. Publish new versions only via the Admin SDK / CI.
-    // This closes the remote-code-execution path where a poisoned version doc
-    // could point the desktop updater at a malicious installer.
+    match /concord_screen_signals/{signalId} {
+      allow create: if signedIn() && incoming().fromUserId == uid();
+      allow read: if signedIn() && resource.data.toUserId == uid();
+      allow delete: if signedIn() && (resource.data.toUserId == uid() || resource.data.fromUserId == uid());
+    }
+
+    match /concord_soundboard/{soundId} {
+      allow read: if signedIn() && isMemberOf(serverDoc(resource.data.serverId));
+      allow create: if signedIn()
+        && incoming().userId == uid()
+        && isMemberOf(serverDoc(incoming().serverId));
+      allow delete: if signedIn() && resource.data.userId == uid();
+    }
+
+    // ---------------------------------------------------------------------
+    // Auto-update manifest: public read, never client-writable. It is
+    // published with admin credentials by scripts/publish-release.mjs.
+    // ---------------------------------------------------------------------
+
     match /concord_app_version/{versionId} {
       allow read: if true;
       allow write: if false;
-    }
-
-    // Fallback: any other collection requires authentication (no anonymous access).
-    match /{document=**} {
-      allow read, write: if signedIn();
     }
   }
 }

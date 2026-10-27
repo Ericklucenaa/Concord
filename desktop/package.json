@@ -1,26 +1,29 @@
 {
   "name": "concord-desktop",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "type": "module",
   "author": "Concord Team",
-  "description": "Concord Desktop Client for Windows",
+  "description": "Concord — chat, voz e transmissão de tela",
   "main": "src/main/index.cjs",
   "scripts": {
+    "dev": "vite",
     "dev:renderer": "vite",
     "dev:electron": "electron .",
-    "dev": "vite",
-    "build:renderer": "vite build",
     "build": "vite build",
+    "build:renderer": "vite build",
     "start": "electron .",
-    "dist:win": "vite build && electron-builder --win --x64",
-    "package:win": "vite build && electron-builder --win --x64",
-    "publish:version": "node publish_version.js"
+    "lint": "eslint src tests",
+    "test": "vitest run",
+    "test:emulators": "firebase emulators:exec --project demo-concord --only firestore,auth \"vitest run\"",
+    "dist:win": "vite build && electron-builder --win --x64 --publish never",
+    "package:win": "npm run dist:win"
   },
   "build": {
     "appId": "com.concord.app",
     "productName": "Concord",
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
@@ -28,7 +31,19 @@
       "src/preload/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**"
+    ],
+    "protocols": [
+      {
+        "name": "Concord",
+        "schemes": [
+          "concord"
+        ]
+      }
+    ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"
@@ -39,22 +54,33 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Concord"
+      "shortcutName": "Concord",
+      "artifactName": "Concord-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Concord-Portable-${version}.${ext}"
     }
   },
   "dependencies": {
-    "firebase": "^12.17.1",
-    "lucide-react": "^1.16.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "socket.io-client": "^4.8.1"
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^10.0.5",
     "cross-env": "^7.0.3",
     "electron": "^34.2.0",
     "electron-builder": "^25.1.8",
-    "vite": "^6.1.0"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "firebase": "^12.17.1",
+    "globals": "^17.13.0",
+    "lucide-react": "^1.16.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.1.0",
+    "vitest": "^3.2.7"
   }
 }

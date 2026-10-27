@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
-import { 
-  X, 
-  Upload, 
-  RefreshCw, 
-  Camera, 
-  Trash2, 
-  Save, 
-  Check, 
-  Settings, 
-  Shield 
+import {
+  X,
+  Upload,
+  RefreshCw,
+  Camera,
+  Trash2,
+  Save,
+  Settings,
+  ScrollText,
+  Ban
 } from 'lucide-react';
-import { ROLES } from '@shared/constants';
 import { useNotification } from '../../context/NotificationContext';
+import { compressImage } from '../../services/cloud/attachments';
+import { isModerator } from '../../services/permissions';
+import { AuditLogPanel, BansPanel } from './ServerModerationPanels';
 
 export default function ServerSettingsModal() {
   const { modalState, closeModal, activeServer, updateServer, deleteServer } = useServer();
@@ -26,9 +28,10 @@ export default function ServerSettingsModal() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState('general');
   const fileInputRef = useRef(null);
 
-  const isOwner = activeServer?.ownerId === user?.id || activeServer?.role === ROLES.OWNER;
+  const isOwner = activeServer?.ownerId === user?.id;
 
   useEffect(() => {
     if (activeServer) {
@@ -38,7 +41,14 @@ export default function ServerSettingsModal() {
       setError('');
       setSaveSuccess(false);
     }
-  }, [activeServer, modalState.serverSettings]);
+    // Only reset the form when the modal opens or the server changes, not on
+    // every live update of the server document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeServer?.id, modalState.serverSettings]);
+
+  useEffect(() => {
+    if (modalState.serverSettings) setTab('general');
+  }, [modalState.serverSettings]);
 
   if (!modalState.serverSettings || !activeServer) return null;
 
@@ -51,17 +61,12 @@ export default function ServerSettingsModal() {
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      setError('A imagem deve ter no máximo 5MB.');
-      return;
-    }
-
     setError('');
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setIcon(event.target.result);
-    };
-    reader.readAsDataURL(file);
+    // Icons live inside the server document, so keep them small.
+    compressImage(file, { maxDim: 256, quality: 0.9 })
+      .then(setIcon)
+      .catch(() => setError('Não foi possível ler esta imagem (GIFs animados não são suportados como ícone).'));
+    e.target.value = '';
   };
 
   const handleRandomIcon = () => {
@@ -129,6 +134,24 @@ export default function ServerSettingsModal() {
           </button>
         </div>
 
+        <div className="modal-tabs">
+          <button className={`tab-btn ${tab === 'general' ? 'active' : ''}`} onClick={() => setTab('general')}>
+            <Settings size={14} /> Geral
+          </button>
+          {isModerator(activeServer, user?.id) && (
+            <button className={`tab-btn ${tab === 'audit' ? 'active' : ''}`} onClick={() => setTab('audit')}>
+              <ScrollText size={14} /> Registro de moderação
+            </button>
+          )}
+          <button className={`tab-btn ${tab === 'bans' ? 'active' : ''}`} onClick={() => setTab('bans')}>
+            <Ban size={14} /> Banidos ({activeServer.bannedIds?.length || 0})
+          </button>
+        </div>
+
+        {tab === 'audit' && <AuditLogPanel server={activeServer} />}
+        {tab === 'bans' && <BansPanel server={activeServer} />}
+
+        {tab === 'general' && <>
         {error && <div className="auth-error" style={{ margin: '16px 20px 0' }}>{error}</div>}
         {saveSuccess && (
           <div style={{ margin: '16px 20px 0', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '10px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
@@ -273,6 +296,7 @@ export default function ServerSettingsModal() {
             </button>
           </div>
         </form>
+        </>}
       </div>
     </div>
   );

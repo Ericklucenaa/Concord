@@ -1,25 +1,15 @@
 import React from 'react';
-import { X, Volume2, Sparkles } from 'lucide-react';
-import { SOUNDBOARD_SOUNDS, soundSynthesizer } from '../services/soundEffects';
+import { X, Sparkles } from 'lucide-react';
+import { SOUNDBOARD_SOUNDS } from '../services/soundEffects';
 import { useVoice } from '../context/VoiceContext';
-import { useAuth } from '../context/AuthContext';
-import { sendSoundboardInCloud } from '../services/cloudSync';
 
 export default function SoundboardModal({ isOpen, onClose }) {
-  const { activeVoiceChannel } = useVoice();
-  const { user } = useAuth();
+  const { playSound, activeVoiceChannel } = useVoice();
 
   if (!isOpen) return null;
 
-  const handlePlaySound = (sound) => {
-    // Play locally
-    soundSynthesizer.play(sound.id);
-
-    // Broadcast to other users in the voice room via Firestore/Cloud
-    if (activeVoiceChannel?.id) {
-      sendSoundboardInCloud(activeVoiceChannel.id, user?.id, user?.username, sound.id);
-    }
-  };
+  // Plays locally and for everyone in the voice room.
+  const handlePlaySound = (sound) => playSound(sound.id);
 
   return (
     <div 
