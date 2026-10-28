@@ -1,10 +1,10 @@
 {
-  "version": "1.2.1",
-  "name": "Concord v1.2.1",
+  "version": "1.2.3",
+  "name": "Concord v1.2.3",
   "releaseDate": "2026-10-28",
-  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.2.1/Concord-Setup-1.2.1.exe",
-  "sha256": "629cb3b756033a67da4ebc6ffa8002415175dcf6edc05c61f98cc4dd5bb73208",
+  "downloadUrl": "https://github.com/Ericklucenaa/Concord/releases/download/v1.2.3/Concord-Setup-1.2.3.exe",
+  "sha256": "a460d816eaf7526c55b4dddee8f29461cec51f7d6b2da2f46ebb36088e89688e",
   "webUrl": "https://concord-3af70.web.app",
-  "releaseNotes": "v1.2.1: 18 temas, fundo no chat, 70 sons no soundboard, copiar código de convite, correções de conexão",
+  "releaseNotes": "v1.2.3: corrige a voz (ninguém se ouvia), permite transmitir e assistir ao mesmo tempo, menus de botão direito, temas, fundo no chat e 70 sons",
   "isMandatory": true
 }
