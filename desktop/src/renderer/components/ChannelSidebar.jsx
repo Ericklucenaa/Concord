@@ -51,6 +51,7 @@ const QUALITY_LABEL = {
   ok: 'Conexão instável',
   bad: 'Conexão ruim',
   connecting: 'Conectando…',
+  failed: 'Sem conexão',
   unknown: 'Conectado'
 };
 

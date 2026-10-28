@@ -570,6 +570,13 @@ service cloud.firestore {
       allow delete: if signedIn() && resource.data.userId == uid();
     }
 
+    // App configuration (e.g. TURN relay credentials): readable by signed-in
+    // users, written only with admin credentials (scripts/set-turn.mjs).
+    match /concord_app_config/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // ---------------------------------------------------------------------
     // Auto-update manifest: public read, never client-writable. It is
     // published with admin credentials by scripts/publish-release.mjs.

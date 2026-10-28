@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Send, Check, UserPlus, Link as LinkIcon, Trash2, Clock } from 'lucide-react';
+import { X, Send, Check, UserPlus, Link as LinkIcon, Trash2, Clock, Copy } from 'lucide-react';
 import { useServer } from '../../context/ServerContext';
 import { useAuth } from '../../context/AuthContext';
 import { inviteLinkFor, listenToServerInvites, revokeInvite, inviteStatus, INVITE_EXPIRY_OPTIONS } from '../../services/cloud/servers';
@@ -80,11 +80,13 @@ export default function InviteModal() {
     }
   };
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(inviteLinkFor(generated.code));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  // `copied` holds what was just copied: 'link', 'code' or an invite code from the list.
+  const copy = (text, what) => {
+    navigator.clipboard.writeText(text);
+    setCopied(what);
+    setTimeout(() => setCopied((cur) => (cur === what ? false : cur)), 2000);
   };
+  const copyLink = () => copy(inviteLinkFor(generated.code), 'link');
 
   const channelName = activeServer.channels?.find((c) => c.id === selectedChannelForInvite)?.name;
   const active = invites.filter((i) => inviteStatus(i) === 'active');
@@ -126,12 +128,21 @@ export default function InviteModal() {
           <div className="form-group">
             <label className="form-label">{channelName ? `Link para #${channelName}` : 'Link de convite'}</label>
             {generated ? (
+              <>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input className="form-input" readOnly value={inviteLinkFor(generated.code)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }} />
                 <button className="btn btn-primary" onClick={copyLink}>
-                  {copied ? <Check size={15} /> : <LinkIcon size={15} />} {copied ? 'Copiado!' : 'Copiar'}
+                  {copied === 'link' ? <Check size={15} /> : <LinkIcon size={15} />} {copied === 'link' ? 'Copiado!' : 'Copiar link'}
                 </button>
               </div>
+              <div className="invite-code-box">
+                <span>Código</span>
+                <code>{generated.code}</code>
+                <button className="btn btn-secondary btn-sm" onClick={() => copy(generated.code, 'code')}>
+                  {copied === 'code' ? <Check size={14} /> : <Copy size={14} />} {copied === 'code' ? 'Copiado!' : 'Copiar código'}
+                </button>
+              </div>
+              </>
             ) : (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 <select className="form-select" value={expiry} onChange={(e) => setExpiry(e.target.value)} aria-label="Validade">
@@ -154,6 +165,22 @@ export default function InviteModal() {
                 {active.map((i) => (
                   <div key={i.code} className="invite-row">
                     <code>{i.code}</code>
+                    <button
+                      className="icon-btn"
+                      title="Copiar código"
+                      aria-label={`Copiar código ${i.code}`}
+                      onClick={() => copy(i.code, i.code)}
+                    >
+                      {copied === i.code ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                    <button
+                      className="icon-btn"
+                      title="Copiar link"
+                      aria-label={`Copiar link do convite ${i.code}`}
+                      onClick={() => copy(inviteLinkFor(i.code), `link:${i.code}`)}
+                    >
+                      {copied === `link:${i.code}` ? <Check size={14} /> : <LinkIcon size={14} />}
+                    </button>
                     <span className="invite-row-meta"><Clock size={11} /> {describe(i)} · por @{i.creatorUsername || '—'}</span>
                     <button className="icon-btn hover-danger" title="Revogar convite" aria-label="Revogar convite" onClick={() => revokeInvite(i.code)}>
                       <Trash2 size={14} />

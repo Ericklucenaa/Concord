@@ -104,7 +104,7 @@
   border-radius: 20px; background: rgba(20, 21, 30, 0.78); backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg);
 }
-[data-theme="light"] .voice-dock { background: rgba(255, 255, 255, 0.85); }
+[data-theme-mode="light"] .voice-dock { background: rgba(255, 255, 255, 0.85); }
 .dock-btn {
   width: 48px; height: 48px; border-radius: 14px; border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;

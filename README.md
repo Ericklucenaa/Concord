@@ -66,7 +66,14 @@ O CI (GitHub Actions) roda lint, build e testes em todo push e PR. Em `main`, ta
 
 ### TURN (opcional)
 
-Para que voz e tela funcionem em redes restritivas (redes corporativas, 4G), configure um servidor TURN no build. Veja `desktop/.env.example`.
+Para que voz e tela funcionem em redes restritivas (CGNAT, 4G, redes corporativas), configure um servidor TURN. Sem ele, quem está atrás desses NATs aparece com "Sem conexão"/"Conexão ruim" na chamada. Não precisa gerar outra versão do app:
+
+```bash
+# conta grátis em metered.ca (Open Relay) → copie URLs, usuário e senha do painel
+node scripts/set-turn.mjs "turn:HOST:80,turn:HOST:443?transport=tcp,turns:HOST:443" USUARIO SENHA
+```
+
+Também dá para embutir no build com as variáveis de `desktop/.env.example`.
 
 ### Outras opções de build
 

@@ -1,0 +1,408 @@
+/* ==========================================================================
+   Themes (Settings → Aparência). Each theme overrides the tokens in
+   index.css; the accent can be overridden again by the user (appearance.js).
+   ========================================================================== */
+
+body { background-image: var(--app-backdrop, none); background-attachment: fixed; }
+
+/* --- Dark themes ----------------------------------------------------------- */
+
+[data-theme='midnight'] {
+  --bg-app: #000000;
+  --bg-primary: #07070a;
+  --bg-secondary: #0b0b10;
+  --bg-tertiary: #14141b;
+  --bg-elevated: #101016;
+  --bg-card: rgba(11, 11, 16, 0.94);
+  --border-color: rgba(255, 255, 255, 0.07);
+  --accent-primary: #8b7bff;
+}
+
+[data-theme='slate'] {
+  --bg-app: #10131a;
+  --bg-primary: #181c26;
+  --bg-secondary: #1d2230;
+  --bg-tertiary: #262c3c;
+  --bg-elevated: #222838;
+  --bg-card: rgba(29, 34, 48, 0.94);
+  --text-secondary: #b6bfd2;
+  --text-muted: #7c8599;
+  --accent-primary: #8ea2ff;
+  --accent-primary-hover: #a3b3ff;
+  --accent-gradient: linear-gradient(135deg, #8ea2ff 0%, #60a5fa 100%);
+  --accent-soft: rgba(142, 162, 255, 0.14);
+  --bg-active: rgba(142, 162, 255, 0.15);
+  --border-focus: #8ea2ff;
+}
+
+[data-theme='nebula'] {
+  --bg-app: #0d0717;
+  --bg-primary: #150c22;
+  --bg-secondary: #1a1029;
+  --bg-tertiary: #251839;
+  --bg-elevated: #211533;
+  --bg-card: rgba(26, 16, 41, 0.94);
+  --border-color: rgba(217, 70, 239, 0.12);
+  --border-strong: rgba(217, 70, 239, 0.22);
+  --text-secondary: #c5b5dc;
+  --text-muted: #8a77a6;
+  --accent-primary: #d946ef;
+  --accent-primary-hover: #e879f9;
+  --accent-gradient: linear-gradient(135deg, #e879f9 0%, #8b5cf6 100%);
+  --accent-glow: rgba(217, 70, 239, 0.35);
+  --accent-soft: rgba(217, 70, 239, 0.14);
+  --bg-active: rgba(217, 70, 239, 0.16);
+  --border-focus: #d946ef;
+  --ring: 0 0 0 3px rgba(217, 70, 239, 0.32);
+  --app-backdrop: radial-gradient(ellipse at 15% 0%, rgba(217, 70, 239, 0.16), transparent 50%), radial-gradient(ellipse at 90% 100%, rgba(99, 102, 241, 0.16), transparent 55%);
+}
+
+[data-theme='ocean'] {
+  --bg-app: #060d14;
+  --bg-primary: #0b1520;
+  --bg-secondary: #0f1c2a;
+  --bg-tertiary: #152638;
+  --bg-elevated: #132233;
+  --bg-card: rgba(15, 28, 42, 0.94);
+  --border-color: rgba(56, 189, 248, 0.1);
+  --text-secondary: #a9c3d6;
+  --text-muted: #6b8399;
+  --accent-primary: #38bdf8;
+  --accent-primary-hover: #5cc9fa;
+  --accent-gradient: linear-gradient(135deg, #38bdf8 0%, #6366f1 100%);
+  --accent-glow: rgba(56, 189, 248, 0.32);
+  --accent-soft: rgba(56, 189, 248, 0.14);
+  --bg-active: rgba(56, 189, 248, 0.15);
+  --border-focus: #38bdf8;
+  --ring: 0 0 0 3px rgba(56, 189, 248, 0.3);
+}
+
+[data-theme='aurora'] {
+  --bg-app: #06121a;
+  --bg-primary: #0b1922;
+  --bg-secondary: #0e1f2a;
+  --bg-tertiary: #152c39;
+  --bg-elevated: #122633;
+  --bg-card: rgba(14, 31, 42, 0.92);
+  --border-color: rgba(45, 212, 191, 0.11);
+  --text-secondary: #a7cdc8;
+  --text-muted: #69908d;
+  --accent-primary: #2dd4bf;
+  --accent-primary-hover: #5eead4;
+  --accent-gradient: linear-gradient(135deg, #2dd4bf 0%, #a78bfa 100%);
+  --accent-glow: rgba(45, 212, 191, 0.32);
+  --accent-soft: rgba(45, 212, 191, 0.14);
+  --bg-active: rgba(45, 212, 191, 0.15);
+  --border-focus: #2dd4bf;
+  --ring: 0 0 0 3px rgba(45, 212, 191, 0.3);
+  --app-backdrop: radial-gradient(ellipse at 10% 0%, rgba(45, 212, 191, 0.18), transparent 50%), radial-gradient(ellipse at 100% 20%, rgba(167, 139, 250, 0.18), transparent 50%), radial-gradient(ellipse at 50% 120%, rgba(56, 189, 248, 0.14), transparent 55%);
+}
+
+[data-theme='forest'] {
+  --bg-app: #070e0b;
+  --bg-primary: #0c1612;
+  --bg-secondary: #101d18;
+  --bg-tertiary: #172920;
+  --bg-elevated: #14241d;
+  --bg-card: rgba(16, 29, 24, 0.94);
+  --border-color: rgba(52, 211, 153, 0.1);
+  --text-secondary: #a8c9b9;
+  --text-muted: #6b8c7c;
+  --accent-primary: #34d399;
+  --accent-primary-hover: #5be0ad;
+  --accent-gradient: linear-gradient(135deg, #34d399 0%, #14b8a6 100%);
+  --accent-glow: rgba(52, 211, 153, 0.3);
+  --accent-soft: rgba(52, 211, 153, 0.14);
+  --bg-active: rgba(52, 211, 153, 0.15);
+  --border-focus: #34d399;
+  --ring: 0 0 0 3px rgba(52, 211, 153, 0.3);
+}
+
+[data-theme='nord'] {
+  --bg-app: #1f232b;
+  --bg-primary: #2a2f3a;
+  --bg-secondary: #2e3440;
+  --bg-tertiary: #3b4252;
+  --bg-elevated: #353c4a;
+  --bg-card: rgba(46, 52, 64, 0.95);
+  --bg-hover: rgba(236, 239, 244, 0.05);
+  --border-color: rgba(236, 239, 244, 0.08);
+  --border-strong: rgba(236, 239, 244, 0.14);
+  --text-primary: #eceff4;
+  --text-secondary: #c8d0dc;
+  --text-muted: #8a93a5;
+  --accent-primary: #88c0d0;
+  --accent-primary-hover: #9fcfdc;
+  --accent-gradient: linear-gradient(135deg, #88c0d0 0%, #81a1c1 100%);
+  --accent-glow: rgba(136, 192, 208, 0.3);
+  --accent-soft: rgba(136, 192, 208, 0.15);
+  --bg-active: rgba(136, 192, 208, 0.16);
+  --border-focus: #88c0d0;
+  --ring: 0 0 0 3px rgba(136, 192, 208, 0.3);
+  --accent-success: #a3be8c;
+  --accent-warning: #ebcb8b;
+  --accent-danger: #bf616a;
+}
+
+[data-theme='dracula'] {
+  --bg-app: #191a21;
+  --bg-primary: #21222c;
+  --bg-secondary: #282a36;
+  --bg-tertiary: #343746;
+  --bg-elevated: #2e303e;
+  --bg-card: rgba(40, 42, 54, 0.95);
+  --border-color: rgba(248, 248, 242, 0.07);
+  --border-strong: rgba(248, 248, 242, 0.13);
+  --text-primary: #f8f8f2;
+  --text-secondary: #c9c9d6;
+  --text-muted: #8a8fb0;
+  --accent-primary: #bd93f9;
+  --accent-primary-hover: #cba6fb;
+  --accent-gradient: linear-gradient(135deg, #bd93f9 0%, #ff79c6 100%);
+  --accent-glow: rgba(189, 147, 249, 0.32);
+  --accent-soft: rgba(189, 147, 249, 0.15);
+  --bg-active: rgba(189, 147, 249, 0.16);
+  --border-focus: #bd93f9;
+  --ring: 0 0 0 3px rgba(189, 147, 249, 0.3);
+  --accent-success: #50fa7b;
+  --accent-warning: #f1fa8c;
+  --accent-danger: #ff5555;
+}
+
+[data-theme='sakura'] {
+  --bg-app: #140a10;
+  --bg-primary: #1c0f17;
+  --bg-secondary: #22121b;
+  --bg-tertiary: #301b27;
+  --bg-elevated: #2a1722;
+  --bg-card: rgba(34, 18, 27, 0.94);
+  --border-color: rgba(244, 114, 182, 0.11);
+  --text-primary: #fdeef6;
+  --text-secondary: #d9b6c8;
+  --text-muted: #a07a8e;
+  --accent-primary: #f472b6;
+  --accent-primary-hover: #f9a8d4;
+  --accent-gradient: linear-gradient(135deg, #f9a8d4 0%, #f472b6 50%, #c084fc 100%);
+  --accent-glow: rgba(244, 114, 182, 0.32);
+  --accent-soft: rgba(244, 114, 182, 0.14);
+  --bg-active: rgba(244, 114, 182, 0.16);
+  --border-focus: #f472b6;
+  --ring: 0 0 0 3px rgba(244, 114, 182, 0.3);
+  --app-backdrop: radial-gradient(ellipse at 85% 0%, rgba(244, 114, 182, 0.14), transparent 50%);
+}
+
+[data-theme='crimson'] {
+  --bg-app: #120708;
+  --bg-primary: #190b0d;
+  --bg-secondary: #1f0e10;
+  --bg-tertiary: #2c1418;
+  --bg-elevated: #261114;
+  --bg-card: rgba(31, 14, 16, 0.94);
+  --border-color: rgba(244, 63, 94, 0.11);
+  --text-primary: #fdecef;
+  --text-secondary: #d6adb4;
+  --text-muted: #9a7178;
+  --accent-primary: #f43f5e;
+  --accent-primary-hover: #fb7185;
+  --accent-gradient: linear-gradient(135deg, #fb7185 0%, #e11d48 100%);
+  --accent-glow: rgba(244, 63, 94, 0.35);
+  --accent-soft: rgba(244, 63, 94, 0.14);
+  --bg-active: rgba(244, 63, 94, 0.16);
+  --border-focus: #f43f5e;
+  --ring: 0 0 0 3px rgba(244, 63, 94, 0.3);
+  --accent-danger: #ff6b6b;
+}
+
+[data-theme='sunset'] {
+  --bg-app: #140c08;
+  --bg-primary: #1b110c;
+  --bg-secondary: #22150f;
+  --bg-tertiary: #301e15;
+  --bg-elevated: #2a1a12;
+  --bg-card: rgba(34, 21, 15, 0.94);
+  --border-color: rgba(251, 146, 60, 0.11);
+  --text-primary: #fff1e8;
+  --text-secondary: #dcbba6;
+  --text-muted: #a1806b;
+  --accent-primary: #fb923c;
+  --accent-primary-hover: #fdba74;
+  --accent-gradient: linear-gradient(135deg, #fbbf24 0%, #fb923c 45%, #f43f5e 100%);
+  --accent-glow: rgba(251, 146, 60, 0.35);
+  --accent-soft: rgba(251, 146, 60, 0.14);
+  --bg-active: rgba(251, 146, 60, 0.16);
+  --border-focus: #fb923c;
+  --ring: 0 0 0 3px rgba(251, 146, 60, 0.3);
+  --app-backdrop: radial-gradient(ellipse at 50% 120%, rgba(244, 63, 94, 0.16), transparent 55%), radial-gradient(ellipse at 0% 0%, rgba(251, 191, 36, 0.1), transparent 45%);
+}
+
+[data-theme='mocha'] {
+  --bg-app: #161210;
+  --bg-primary: #1e1815;
+  --bg-secondary: #241d19;
+  --bg-tertiary: #322822;
+  --bg-elevated: #2c231e;
+  --bg-card: rgba(36, 29, 25, 0.95);
+  --border-color: rgba(214, 163, 116, 0.11);
+  --text-primary: #f5ebe0;
+  --text-secondary: #d1bfae;
+  --text-muted: #9a8676;
+  --accent-primary: #d6a374;
+  --accent-primary-hover: #e3b98f;
+  --accent-gradient: linear-gradient(135deg, #e3b98f 0%, #b7794a 100%);
+  --accent-glow: rgba(214, 163, 116, 0.3);
+  --accent-soft: rgba(214, 163, 116, 0.14);
+  --bg-active: rgba(214, 163, 116, 0.16);
+  --border-focus: #d6a374;
+  --ring: 0 0 0 3px rgba(214, 163, 116, 0.3);
+}
+
+[data-theme='cyber'] {
+  --bg-app: #050508;
+  --bg-primary: #0a0a10;
+  --bg-secondary: #0e0e16;
+  --bg-tertiary: #181824;
+  --bg-elevated: #13131d;
+  --bg-card: rgba(14, 14, 22, 0.95);
+  --border-color: rgba(34, 211, 238, 0.12);
+  --border-strong: rgba(34, 211, 238, 0.24);
+  --text-primary: #f5f5f5;
+  --text-secondary: #b4bccc;
+  --text-muted: #6f7790;
+  --accent-primary: #facc15;
+  --accent-primary-hover: #fde047;
+  --accent-gradient: linear-gradient(135deg, #facc15 0%, #22d3ee 100%);
+  --accent-glow: rgba(250, 204, 21, 0.35);
+  --accent-soft: rgba(250, 204, 21, 0.13);
+  --bg-active: rgba(34, 211, 238, 0.14);
+  --border-focus: #22d3ee;
+  --ring: 0 0 0 3px rgba(34, 211, 238, 0.35);
+  --app-backdrop: linear-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 1px) 0 0 / 40px 40px, linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px) 0 0 / 40px 40px;
+}
+[data-theme='cyber'] .btn-primary { color: #0a0a10; }
+
+/* --- Light themes ---------------------------------------------------------- */
+
+[data-theme-mode='light'] {
+  --bg-hover: rgba(17, 24, 39, 0.05);
+  --bg-overlay: rgba(17, 20, 34, 0.4);
+  --border-color: rgba(17, 24, 39, 0.08);
+  --border-strong: rgba(17, 24, 39, 0.14);
+  --shadow-sm: 0 1px 2px rgba(17, 24, 39, 0.06);
+  --shadow-md: 0 8px 24px rgba(17, 24, 39, 0.1);
+  --shadow-lg: 0 24px 64px rgba(17, 24, 39, 0.18);
+  color-scheme: light;
+}
+
+[data-theme='light'] {
+  --bg-app: #e9ebf2;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f7fb;
+  --bg-tertiary: #eceef5;
+  --bg-elevated: #ffffff;
+  --bg-active: rgba(124, 108, 255, 0.12);
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --text-primary: #12131a;
+  --text-secondary: #4b5066;
+  --text-muted: #80869c;
+  --accent-primary: #6d5cf6;
+  --accent-primary-hover: #5b4ae6;
+}
+
+[data-theme='latte'] {
+  --bg-app: #efe7dd;
+  --bg-primary: #fffcf8;
+  --bg-secondary: #fbf7f2;
+  --bg-tertiary: #f1e9df;
+  --bg-elevated: #fffcf8;
+  --bg-card: rgba(255, 252, 248, 0.96);
+  --border-color: rgba(84, 52, 30, 0.1);
+  --border-strong: rgba(84, 52, 30, 0.16);
+  --text-primary: #3b2a20;
+  --text-secondary: #6b5546;
+  --text-muted: #9a8576;
+  --accent-primary: #c2703d;
+  --accent-primary-hover: #a95e30;
+  --accent-gradient: linear-gradient(135deg, #d98a4f 0%, #b45f2f 100%);
+  --accent-glow: rgba(194, 112, 61, 0.3);
+  --accent-soft: rgba(194, 112, 61, 0.12);
+  --bg-active: rgba(194, 112, 61, 0.13);
+  --border-focus: #c2703d;
+  --ring: 0 0 0 3px rgba(194, 112, 61, 0.25);
+}
+
+[data-theme='lavender'] {
+  --bg-app: #ebe7f7;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9f7ff;
+  --bg-tertiary: #efebfb;
+  --bg-elevated: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --border-color: rgba(76, 29, 149, 0.09);
+  --border-strong: rgba(76, 29, 149, 0.16);
+  --text-primary: #221b38;
+  --text-secondary: #554b72;
+  --text-muted: #8c84a6;
+  --accent-primary: #8b5cf6;
+  --accent-primary-hover: #7c3aed;
+  --accent-gradient: linear-gradient(135deg, #a78bfa 0%, #ec4899 100%);
+  --accent-glow: rgba(139, 92, 246, 0.3);
+  --accent-soft: rgba(139, 92, 246, 0.12);
+  --bg-active: rgba(139, 92, 246, 0.13);
+  --border-focus: #8b5cf6;
+  --ring: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+
+[data-theme='mint'] {
+  --bg-app: #e3f1ec;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7fcfa;
+  --bg-tertiary: #e9f5f0;
+  --bg-elevated: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --border-color: rgba(6, 78, 59, 0.09);
+  --border-strong: rgba(6, 78, 59, 0.16);
+  --text-primary: #10241d;
+  --text-secondary: #3f5d52;
+  --text-muted: #7a978c;
+  --accent-primary: #10b981;
+  --accent-primary-hover: #059669;
+  --accent-gradient: linear-gradient(135deg, #34d399 0%, #0ea5e9 100%);
+  --accent-glow: rgba(16, 185, 129, 0.3);
+  --accent-soft: rgba(16, 185, 129, 0.12);
+  --bg-active: rgba(16, 185, 129, 0.13);
+  --border-focus: #10b981;
+  --ring: 0 0 0 3px rgba(16, 185, 129, 0.25);
+}
+
+/* --- Chat background --------------------------------------------------------
+   Painted behind the whole chat panel (header, messages, composer); a layer
+   of the theme's surface color on top keeps text readable. */
+
+[data-chat-bg] .chat-area { position: relative; isolation: isolate; }
+[data-chat-bg] .chat-area::before,
+[data-chat-bg] .chat-area::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+[data-chat-bg] .chat-area::before {
+  background: var(--chat-bg);
+  filter: blur(var(--chat-bg-blur, 0px));
+  transform: scale(1.04);
+}
+[data-chat-bg] .chat-area::after {
+  background: var(--bg-primary);
+  opacity: var(--chat-bg-dim, 0.55);
+}
+[data-chat-bg] .chat-area { background-color: transparent; }
+[data-chat-bg] .chat-area .chat-header {
+  background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  backdrop-filter: blur(12px);
+}
+[data-chat-bg] .chat-area .chat-input-box {
+  background: color-mix(in srgb, var(--bg-tertiary) 88%, transparent);
+  backdrop-filter: blur(12px);
+}
+[data-chat-bg] .chat-area .message-item:hover { background: color-mix(in srgb, var(--bg-primary) 45%, transparent); }

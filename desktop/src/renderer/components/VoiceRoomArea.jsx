@@ -32,12 +32,16 @@ import { VIEWER_QUALITIES } from '../context/ScreenShareContext';
 import { isModerator } from '../services/permissions';
 import { defaultAvatar } from '../services/cloud/util';
 import { logWarn } from '../services/log';
+import { hasTurnServer } from '../services/iceServers';
+
+const STATE_LABEL = { new: 'Iniciando', connecting: 'Conectando', connected: 'Conectado', disconnected: 'Caiu', failed: 'Falhou' };
 
 const QUALITY_LABEL = {
   good: 'Conexão estável',
   ok: 'Conexão instável',
   bad: 'Conexão ruim',
   connecting: 'Conectando…',
+  failed: 'Sem conexão',
   unknown: 'Conectado'
 };
 
@@ -223,11 +227,13 @@ export default function VoiceRoomArea({ embedded = false }) {
           {statsRows.length === 0 && <div className="side-empty">Ninguém mais na chamada.</div>}
           {statsRows.length > 0 && (
             <table>
-              <thead><tr><th>Pessoa</th><th>Ping</th><th>Jitter</th><th>Perda</th></tr></thead>
+              <thead><tr><th>Pessoa</th><th>Estado</th><th>Rota</th><th>Ping</th><th>Jitter</th><th>Perda</th></tr></thead>
               <tbody>
                 {statsRows.map((r) => (
                   <tr key={r.userId}>
                     <td>{r.username}</td>
+                    <td className={r.stats && r.stats.state !== 'connected' ? 'bad' : ''}>{r.stats ? STATE_LABEL[r.stats.state] || r.stats.state : '—'}</td>
+                    <td>{r.stats?.route === 'relay' ? 'Relay (TURN)' : r.stats?.route === 'direct' ? 'Direta' : '—'}</td>
                     <td>{r.stats?.rtt ?? '—'} {r.stats?.rtt != null && 'ms'}</td>
                     <td>{r.stats?.jitter ?? '—'} {r.stats?.jitter != null && 'ms'}</td>
                     <td className={r.stats?.loss > 5 ? 'bad' : ''}>{r.stats ? `${r.stats.loss}%` : '—'}</td>
@@ -236,7 +242,13 @@ export default function VoiceRoomArea({ embedded = false }) {
               </tbody>
             </table>
           )}
-          <div className="hint">Ping alto ou perda acima de 5% indicam rede instável. Um servidor TURN ajuda em redes restritivas.</div>
+          <div className="hint">
+            {statsRows.some((r) => r.stats && ['failed', 'disconnected', 'connecting', 'new'].includes(r.stats.state))
+              ? hasTurnServer()
+                ? 'Alguém não conseguiu conectar mesmo pelo relay. Peça para a pessoa sair e entrar de novo na chamada.'
+                : 'Sem conexão direta com alguém: a rede de vocês (CGNAT, 4G, firewall) bloqueia chamadas P2P. É preciso configurar um servidor TURN (veja o README).'
+              : 'Ping acima de 200 ms ou perda acima de 3% indicam rede instável.'}
+          </div>
         </div>
       )}
 

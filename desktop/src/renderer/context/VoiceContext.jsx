@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { useAuth } from './AuthContext';
 import { useServer } from './ServerContext';
 import { useNotification } from './NotificationContext';
-import { getIceServers } from '../services/iceServers';
+import { getIceServers, loadIceConfig } from '../services/iceServers';
 import {
   joinVoicePresence,
   updateVoicePresence,
@@ -43,9 +43,13 @@ function readBool(key) {
 
 function qualityFrom(stats) {
   if (!stats) return 'unknown';
-  const { rtt = 0, loss = 0 } = stats;
-  if (rtt < 150 && loss < 2) return 'good';
-  if (rtt < 300 && loss < 8) return 'ok';
+  if (stats.state === 'new' || stats.state === 'connecting') return 'connecting';
+  if (stats.state === 'failed') return 'failed';
+  if (stats.state !== 'connected') return 'bad';
+  const rtt = stats.rtt ?? 0;
+  const loss = stats.loss ?? 0;
+  if (rtt < 200 && loss < 3) return 'good';
+  if (rtt < 400 && loss < 10) return 'ok';
   return 'bad';
 }
 
@@ -665,9 +669,13 @@ export function VoiceProvider({ children }) {
           let lost = 0;
           let received = 0;
           let jitter = null;
+          let route = null;
           report.forEach((s) => {
-            if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime !== undefined) {
+            if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.currentRoundTripTime !== undefined && (s.nominated || rtt === null)) {
               rtt = Math.round(s.currentRoundTripTime * 1000);
+              const local = report.get(s.localCandidateId);
+              const remote = report.get(s.remoteCandidateId);
+              route = local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relay' : 'direct';
             }
             if (s.type === 'inbound-rtp' && s.kind === 'audio') {
               lost += s.packetsLost || 0;
@@ -675,12 +683,15 @@ export function VoiceProvider({ children }) {
               if (typeof s.jitter === 'number') jitter = Math.round(s.jitter * 1000);
             }
           });
-          const prev = lastStatsRef.current.get(id) || { lost: 0, received: 0 };
+          if (pc.connectionState === 'closed') continue;
+          const prev = lastStatsRef.current.get(id) || { lost: 0, received: 0, loss: 0 };
           const dLost = Math.max(0, lost - prev.lost);
           const dReceived = Math.max(0, received - prev.received);
-          lastStatsRef.current.set(id, { lost, received });
-          const loss = dLost + dReceived > 0 ? Math.round((dLost / (dLost + dReceived)) * 1000) / 10 : 0;
-          next.set(id, { rtt, loss, jitter, state: pc.connectionState });
+          const instant = dLost + dReceived > 0 ? (dLost / (dLost + dReceived)) * 100 : 0;
+          // Smoothed so one bad second does not flip the indicator to red.
+          const smoothed = prev.loss * 0.6 + instant * 0.4;
+          lastStatsRef.current.set(id, { lost, received, loss: smoothed });
+          next.set(id, { rtt, loss: Math.round(smoothed * 10) / 10, jitter, route, state: pc.connectionState });
         } catch (err) {
           logWarn('voice stats', err);
         }
@@ -693,10 +704,10 @@ export function VoiceProvider({ children }) {
   const connectionQuality = useMemo(() => {
     if (!activeVoiceChannel) return 'unknown';
     if (connectionStats.size === 0) return currentParticipants.length > 1 ? 'connecting' : 'good';
-    const order = ['good', 'ok', 'bad'];
+    const order = ['good', 'ok', 'connecting', 'bad', 'failed'];
     let worst = 'good';
     connectionStats.forEach((s) => {
-      const q = s.state === 'connected' ? qualityFrom(s) : 'bad';
+      const q = qualityFrom(s);
       if (order.indexOf(q) > order.indexOf(worst)) worst = q;
     });
     return worst;
@@ -752,6 +763,7 @@ export function VoiceProvider({ children }) {
    */
   const joinVoice = async (requested) => {
     if (!requested || !user) return;
+    await loadIceConfig();
     let channel = requested;
     const serverId = channel.threadId ? null : channel.serverId || activeServer?.id;
     if (!serverId && !channel.threadId) return;

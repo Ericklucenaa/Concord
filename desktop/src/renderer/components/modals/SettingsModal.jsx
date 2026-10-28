@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import { compressImage } from '../../services/cloud/attachments';
 import { AppSettingsPanel, VoiceModeSettings } from './SettingsPanels';
 import { ProfileExtras, PrivacyAccountPanel, VoiceExtras } from './AccountPanels';
+import AppearancePanel from './AppearancePanel';
 
 const EXPIRY_OPTIONS = { '30m': 30 * 60_000, '1h': 60 * 60_000, '4h': 4 * 60 * 60_000, today: 24 * 60 * 60_000 };
 import { useServer } from '../../context/ServerContext';
@@ -86,13 +87,6 @@ export default function SettingsModal() {
   const [isTestingMic, setIsTestingMic] = useState(false);
   const testStreamRef = useRef(null);
   const [testMicLevel, setTestMicLevel] = useState(0);
-
-  const [theme, setTheme] = useState(() => localStorage.getItem('concord_theme') || 'dark');
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('concord_theme', theme);
-  }, [theme]);
 
   if (!modalState.settings) return null;
 
@@ -870,77 +864,7 @@ export default function SettingsModal() {
               )}
 
               {/* APPEARANCE TAB */}
-              {activeTab === 'appearance' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                  {/* Theme Selector */}
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontWeight: 700, marginBottom: 8 }}>
-                      Tema da Interface
-                    </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                      {/* 1. Discord Dark */}
-                      <div 
-                        className={`source-item ${theme === 'dark' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#313338', border: theme === 'dark' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)' }}
-                        onClick={() => setTheme('dark')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f2f3f5' }}>Escuro Clássico</div>
-                        <div style={{ fontSize: 11, color: '#949ba4' }}>Padrão Discord Dark</div>
-                      </div>
-
-                      {/* 2. Midnight OLED */}
-                      <div 
-                        className={`source-item ${theme === 'midnight' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#000000', border: theme === 'midnight' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.15)' }}
-                        onClick={() => setTheme('midnight')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f8fafc' }}>Midnight OLED</div>
-                        <div style={{ fontSize: 11, color: '#64748b' }}>Preto Absoluto</div>
-                      </div>
-
-                      {/* 3. Slate / Grafite */}
-                      <div 
-                        className={`source-item ${theme === 'slate' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#181a20', border: theme === 'slate' ? '2px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.1)' }}
-                        onClick={() => setTheme('slate')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9' }}>Grafite / Slate</div>
-                        <div style={{ fontSize: 11, color: '#94a3b8' }}>Cinza Neutro Sóbrio</div>
-                      </div>
-
-                      {/* 4. Ocean Navy */}
-                      <div 
-                        className={`source-item ${theme === 'ocean' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#0a1118', border: theme === 'ocean' ? '2px solid var(--accent-primary)' : '1px solid rgba(56,189,248,0.2)' }}
-                        onClick={() => setTheme('ocean')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#f0f9ff' }}>Deep Ocean</div>
-                        <div style={{ fontSize: 11, color: '#7dd3fc' }}>Azul Profundo Navy</div>
-                      </div>
-
-                      {/* 5. Forest Dark */}
-                      <div 
-                        className={`source-item ${theme === 'forest' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#0a1410', border: theme === 'forest' ? '2px solid var(--accent-primary)' : '1px solid rgba(52,211,153,0.2)' }}
-                        onClick={() => setTheme('forest')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#ecfdf5' }}>Forest Dark</div>
-                        <div style={{ fontSize: 11, color: '#6ee7b7' }}>Esmeralda Noturno</div>
-                      </div>
-
-                      {/* 6. Light Mode */}
-                      <div 
-                        className={`source-item ${theme === 'light' ? 'selected' : ''}`}
-                        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#ffffff', border: theme === 'light' ? '2px solid var(--accent-primary)' : '1px solid rgba(0,0,0,0.15)' }}
-                        onClick={() => setTheme('light')}
-                      >
-                        <div style={{ fontWeight: 700, fontSize: 13, color: '#060607' }}>Claro Clássico</div>
-                        <div style={{ fontSize: 11, color: '#5c5e66' }}>Tema Branco Limpo</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+              {activeTab === 'appearance' && <AppearancePanel />}
             </div>
           </div>
         </div>

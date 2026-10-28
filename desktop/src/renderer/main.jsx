@@ -6,9 +6,12 @@ import './styles/index.css';
 import './styles/features.css';
 import './styles/voice.css';
 import './styles/v12.css';
+import './styles/themes.css';
+import './styles/appearance.css';
+import { applyAppearance } from './services/appearance';
 
-// Apply the saved theme before the first paint.
-document.documentElement.setAttribute('data-theme', localStorage.getItem('concord_theme') || 'dark');
+// Apply the saved theme, accent and chat background before the first paint.
+applyAppearance();
 
 // The desktop overlay window loads this same bundle with #overlay and must not
 // start Firebase, so each entry is loaded on demand.
