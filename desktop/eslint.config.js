@@ -33,5 +33,21 @@ export default [
       sourceType: 'commonjs',
       globals: { ...globals.node }
     }
+  },
+  {
+    files: ['tests/e2e/**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'commonjs',
+      globals: { ...globals.node }
+    }
+  },
+  {
+    files: ['tests/e2e/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.node }
+    }
   }
 ];
