@@ -361,6 +361,51 @@ app.whenReady().then(async () => {
     await sleep(2000);
     sa = await streamState(A);
     check('tela: B para de assistir e A continua transmitindo', sa.sharing && sa.framesAdvancing, JSON.stringify(sa));
+
+    // --- 3. Camera -------------------------------------------------------------
+    await api(A).js(`document.querySelector('.dock-btn[title="Ligar câmera"]').click(); return true;`);
+    await sleep(5000);
+    const cam = await api(B).js(`
+      const tile = [...document.querySelectorAll('.voice-tile')].find((t) => t.textContent.includes('${names.A}'));
+      const v = tile?.querySelector('video');
+      if (!v) return { video: false };
+      const f1 = v.getVideoPlaybackQuality().totalVideoFrames;
+      await new Promise((r) => setTimeout(r, 1500));
+      return { video: true, width: v.videoWidth, framesAdvancing: v.getVideoPlaybackQuality().totalVideoFrames > f1 };
+    `);
+    check('câmera: B vê a câmera de A ao vivo', cam.video && cam.width > 0 && cam.framesAdvancing, JSON.stringify(cam));
+    await api(A).js(`document.querySelector('.dock-btn[title="Desligar câmera"]').click(); return true;`);
+    await sleep(3000);
+    const camOff = await api(B).js(`
+      const tile = [...document.querySelectorAll('.voice-tile')].find((t) => t.textContent.includes('${names.A}'));
+      return { video: Boolean(tile?.querySelector('video')) };
+    `);
+    check('câmera: ao desligar, o vídeo some para B', !camOff.video, JSON.stringify(camOff));
+
+    // --- 4. Private call between friends (DM) ---------------------------------
+    const pair = [aId, bId].sort();
+    const put = (docPath, data) => fetch(`${FS}/${docPath}`, {
+      method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, enc(v)])) })
+    });
+    const profiles = { [aId]: { username: names.A, avatar: '' }, [bId]: { username: names.B, avatar: '' } };
+    await put(`concord_friends/${pair.join('_')}`, { id: pair.join('_'), participants: pair, requesterId: aId, status: 'accepted', profiles });
+    const threadId = `dm_${pair.join('_')}`;
+    await put(`concord_dm_threads/${threadId}`, { id: threadId, isGroup: false, participants: pair, profiles, lastMessageAt: new Date().toISOString(), lastMessageBy: aId, lastPreview: 'oi' });
+    await sleep(2000);
+    await api(A).js(`document.querySelector('.server-sidebar .server-btn').click(); return true;`);
+    await api(A).waitFor(`[...document.querySelectorAll('.dm-item')].some((x) => x.textContent.includes('${names.B}'))`, 'dm item');
+    await api(A).js(`[...document.querySelectorAll('.dm-item')].find((x) => x.textContent.includes('${names.B}')).click(); return true;`);
+    await api(A).waitFor(`document.querySelector('[aria-label="Iniciar chamada de voz"]')`, 'call button');
+    await api(A).js(`document.querySelector('[aria-label="Iniciar chamada de voz"]').click(); return true;`);
+    await api(B).waitFor(`document.querySelector('.incoming-call [aria-label="Atender"]')`, 'incoming call banner', 20000);
+    check('DM: B recebe o aviso de chamada', true);
+    await api(B).js(`document.querySelector('.incoming-call [aria-label="Atender"]').click(); return true;`);
+    await sleep(7000);
+    a = await audibleRemotes(A);
+    b = await audibleRemotes(B);
+    check('DM: A ouve B na chamada privada', a.audible >= 1, JSON.stringify(a));
+    check('DM: B ouve A na chamada privada', b.audible >= 1, JSON.stringify(b));
   } catch (err) {
     check('execução do teste', false, err.message.slice(0, 500));
   } finally {
