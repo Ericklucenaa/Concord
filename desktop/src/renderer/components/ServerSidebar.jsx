@@ -1,59 +1,77 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
-import { 
-  Radio, 
-  Plus, 
-  Mail, 
-  Settings, 
-  UserPlus, 
-  Trash2, 
-  LogOut, 
+import {
+  Radio,
+  Plus,
+  Mail,
+  Settings,
+  UserPlus,
+  Trash2,
+  LogOut,
   FolderPlus,
   AtSign,
-  CheckCheck
+  CheckCheck,
+  Bell,
+  BellOff,
+  Copy
 } from 'lucide-react';
 import { useNotification } from '../context/NotificationContext';
 import { useUnread } from '../context/UnreadContext';
 import MentionsInbox from './modals/MentionsInbox';
 import { isAdmin } from '../services/permissions';
+import { useOverlayUI } from '../context/OverlayUIContext';
+import { MUTE_DURATIONS } from '../services/cloud/userSettings';
 
 export default function ServerSidebar() {
   const { showConfirm } = useNotification();
-  const { 
-    servers, 
-    activeServer, 
-    setActiveServer, 
-    pendingInvites, 
+  const {
+    servers,
+    activeServer,
+    setActiveServer,
+    pendingInvites,
     openModal,
     deleteServer,
-    leaveServer 
+    leaveServer
   } = useServer();
   const { user } = useAuth();
-  const { serverSummary, unreadThreadCount, unreadMentions, markServerRead } = useUnread();
+  const { serverSummary, unreadThreadCount, unreadMentions, markServerRead, isServerMuted, muteServer, serverNotifyLevel, setServerNotify } = useUnread();
+  const { openMenu } = useOverlayUI();
   const [inboxOpen, setInboxOpen] = useState(false);
 
-  const [contextMenu, setContextMenu] = useState(null); // { server, x, y }
-
-  useEffect(() => {
-    const handleCloseContext = () => setContextMenu(null);
-    window.addEventListener('click', handleCloseContext);
-    window.addEventListener('contextmenu', handleCloseContext);
-    return () => {
-      window.removeEventListener('click', handleCloseContext);
-      window.removeEventListener('contextmenu', handleCloseContext);
-    };
-  }, []);
-
   const handleContextMenu = (e, server) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setActiveServer(server);
-    setContextMenu({
-      server,
-      x: Math.min(e.clientX, window.innerWidth - 220),
-      y: Math.min(e.clientY, window.innerHeight - 240)
-    });
+    const admin = isAdmin(server, user?.id);
+    const muted = isServerMuted(server.id);
+    const level = serverNotifyLevel(server.id);
+    openMenu(e, [
+      { label: 'Marcar como lido', icon: CheckCheck, onClick: () => markServerRead(server) },
+      { label: 'Convidar pessoas', icon: UserPlus, onClick: () => { setActiveServer(server); openModal('invite'); } },
+      { separator: true },
+      ...(muted
+        ? [{ label: 'Reativar notificações', icon: Bell, onClick: () => muteServer(server.id, null) }]
+        : [
+            { heading: 'Silenciar servidor' },
+            ...Object.entries({ '1h': '1 hora', '8h': '8 horas', forever: 'Até eu reativar' }).map(([key, label]) => ({
+              label,
+              icon: BellOff,
+              onClick: () => muteServer(server.id, MUTE_DURATIONS[key])
+            }))
+          ]),
+      { heading: 'Notificar' },
+      ...[['all', 'Todas as mensagens'], ['mentions', 'Só menções'], ['none', 'Nada']].map(([id, label]) => ({
+        label,
+        checked: level === id,
+        onClick: () => setServerNotify(server.id, id)
+      })),
+      admin && { separator: true },
+      admin && { label: 'Configurações do servidor', icon: Settings, onClick: () => { setActiveServer(server); openModal('serverSettings'); } },
+      admin && { label: 'Criar canal', icon: FolderPlus, onClick: () => { setActiveServer(server); openModal('createChannel'); } },
+      { separator: true },
+      { label: 'Copiar ID do servidor', icon: Copy, onClick: () => navigator.clipboard.writeText(server.id) },
+      isOwner(server)
+        ? { label: 'Excluir servidor', icon: Trash2, danger: true, onClick: () => handleDeleteServer(server) }
+        : { label: 'Sair do servidor', icon: LogOut, danger: true, onClick: () => handleLeaveServer(server) }
+    ], server.name);
   };
 
   const isOwner = (server) => server?.ownerId === user?.id;
@@ -83,12 +101,12 @@ export default function ServerSidebar() {
   return (
     <aside className="server-sidebar">
       {/* Home / Direct Messages */}
-      <div 
+      <div
         className={`server-icon-wrapper ${!activeServer ? 'active' : ''}`}
         title="Mensagens Diretas & Amigos"
       >
         <div className="server-pill" />
-        <button 
+        <button
           className="server-btn"
           onClick={() => setActiveServer(null)}
         >
@@ -98,12 +116,12 @@ export default function ServerSidebar() {
       </div>
 
       {/* Pending Invites Inbox */}
-      <div 
+      <div
         className="server-icon-wrapper"
         title="Caixa de Convites Recebidos"
       >
         <div className="server-pill" />
-        <button 
+        <button
           className="server-btn"
           onClick={() => openModal('pendingInvites')}
         >
@@ -132,14 +150,14 @@ export default function ServerSidebar() {
         const { unread, mentionCount } = serverSummary(server);
 
         return (
-          <div 
-            key={server.id} 
+          <div
+            key={server.id}
             className={`server-icon-wrapper ${isActive ? 'active' : ''} ${unread && !isActive ? 'unread' : ''}`}
             title={`${server.name} (Clique com botão direito para opções)`}
             onContextMenu={(e) => handleContextMenu(e, server)}
           >
             <div className="server-pill" />
-            <button 
+            <button
               className="server-btn"
               onClick={() => setActiveServer(server)}
             >
@@ -157,7 +175,7 @@ export default function ServerSidebar() {
       {/* Add / Create Server */}
       <div className="server-icon-wrapper" title="Criar ou Entrar em um Servidor">
         <div className="server-pill" />
-        <button 
+        <button
           className="server-btn"
           style={{ borderStyle: 'dashed' }}
           onClick={() => openModal('createServer')}
@@ -166,93 +184,6 @@ export default function ServerSidebar() {
         </button>
       </div>
 
-      {/* Server Context Menu */}
-      {contextMenu && (
-        <div 
-          className="context-menu"
-          style={{
-            position: 'fixed',
-            top: contextMenu.y,
-            left: contextMenu.x,
-            backgroundColor: 'var(--bg-tertiary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: 'var(--shadow-lg)',
-            padding: '6px',
-            zIndex: 9999,
-            minWidth: 200,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 4
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', marginBottom: 2 }}>
-            {contextMenu.server.name}
-          </div>
-
-          {isAdmin(contextMenu.server, user?.id) && (
-            <button 
-              className="dropdown-item btn-secondary" 
-              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-              onClick={() => { setContextMenu(null); openModal('serverSettings'); }}
-            >
-              <Settings size={15} style={{ color: 'var(--accent-primary)' }} />
-              Configurações do Servidor
-            </button>
-          )}
-
-          <button 
-            className="dropdown-item btn-secondary" 
-            style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-            onClick={() => { setContextMenu(null); openModal('invite'); }}
-          >
-            <UserPlus size={15} style={{ color: 'var(--accent-success)' }} />
-            Convidar Pessoas
-          </button>
-
-          {isAdmin(contextMenu.server, user?.id) && (
-            <button 
-              className="dropdown-item btn-secondary" 
-              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent' }}
-              onClick={() => { setContextMenu(null); openModal('createChannel'); }}
-            >
-              <FolderPlus size={15} />
-              Criar Canal
-            </button>
-          )}
-
-          <button
-            className="dropdown-item"
-            onClick={() => { setContextMenu(null); markServerRead(contextMenu.server); }}
-          >
-            <CheckCheck size={15} />
-            Marcar como lido
-          </button>
-
-          <div className="server-divider" style={{ width: '100%', margin: '4px 0' }} />
-
-          {isOwner(contextMenu.server) ? (
-            <button 
-              className="dropdown-item btn-secondary" 
-              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
-              onClick={() => { setContextMenu(null); handleDeleteServer(contextMenu.server); }}
-            >
-              <Trash2 size={15} />
-              Excluir Servidor
-            </button>
-          ) : (
-            <button 
-              className="dropdown-item btn-secondary" 
-              style={{ justifyContent: 'flex-start', padding: '8px 10px', fontSize: 13, border: 'none', background: 'transparent', color: 'var(--accent-danger)' }}
-              onClick={() => { setContextMenu(null); handleLeaveServer(contextMenu.server); }}
-            >
-              <LogOut size={15} />
-              Sair do Servidor
-            </button>
-          )}
-        </div>
-      )}
       {inboxOpen && <MentionsInbox onClose={() => setInboxOpen(false)} />}
     </aside>
   );

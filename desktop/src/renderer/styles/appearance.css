@@ -126,3 +126,14 @@
 .stream-switcher button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .stream-switcher button.active { background: var(--accent-primary); color: #fff; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #f43f5e; box-shadow: 0 0 6px #f43f5e; }
+
+/* Context menu: slider and quick reactions */
+.ui-context-menu:focus { outline: none; }
+.ui-context-menu .dropdown-item:focus-visible { background: var(--bg-active) !important; outline: none; }
+.ui-menu-slider { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.ui-menu-slider span { display: flex; justify-content: space-between; }
+.ui-menu-slider em { font-style: normal; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ui-menu-slider input { width: 100%; accent-color: var(--accent-primary); }
+.ui-menu-emojis { display: flex; gap: 2px; padding: 4px 4px 6px; }
+.ui-menu-emojis button { flex: 1; height: 34px; border: none; border-radius: 8px; background: var(--bg-tertiary); font-size: 17px; cursor: pointer; transition: transform 0.1s; }
+.ui-menu-emojis button:hover, .ui-menu-emojis button:focus-visible { background: var(--bg-active); transform: scale(1.12); outline: none; }

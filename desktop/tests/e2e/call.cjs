@@ -75,6 +75,9 @@ if (!window.__probe) {
   const OrigCtx = window.AudioContext; window.__OrigAudioContext = OrigCtx;
   window.AudioContext = function (...a) { const c = new OrigCtx(...a); window.__probe.ctxs.push(c); c.__where = ((new Error().stack.match(/(VoiceContext|noiseSuppression|soundEffects|SettingsModal|AccountPanels)[^)]*/) || ['?'])[0]).slice(0, 80) + ' @' + Math.round(performance.now() / 1000); return c; };
   window.AudioContext.prototype = OrigCtx.prototype;
+  window.__probe.gains = [];
+  const cg = BaseAudioContext.prototype.createGain;
+  BaseAudioContext.prototype.createGain = function () { const g = cg.call(this); window.__probe.gains.push({ node: g, ctx: this }); return g; };
   const gbf = AnalyserNode.prototype.getByteFrequencyData;
   AnalyserNode.prototype.getByteFrequencyData = function (arr) {
     gbf.call(this, arr);
@@ -262,6 +265,65 @@ app.whenReady().then(async () => {
     b = await audibleRemotes(B);
     check('mute: com A mudo, B ouve só C', b.audible === 1, JSON.stringify(b));
     await api(A).js(`document.querySelector('.dock-btn[title="Ativar microfone"]').click()`);
+
+    // --- Context menus -------------------------------------------------------
+    const menuFor = (win, who) => api(win).js(`
+      const tile = [...document.querySelectorAll('.voice-tile')].find((t) => t.textContent.includes('${who}') && !t.textContent.includes('(você)'));
+      const r = tile.getBoundingClientRect();
+      tile.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20 }));
+      await new Promise((res) => setTimeout(res, 300));
+      const menu = document.querySelector('.ui-context-menu');
+      return menu ? [...menu.querySelectorAll('[role="menuitem"], .ui-menu-slider')].map((x) => x.getAttribute('aria-label') || x.textContent.trim()).join(' | ') : null;
+    `);
+    const closeMenu = (win) => api(win).js(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); return true;`);
+
+    const ownerMenu = await menuFor(A, names.B);
+    check('menu (dono): volume, silenciar, moderação e copiar ID',
+      Boolean(ownerMenu) && ['Volume', 'Silenciar para mim', 'Desconectar da chamada', 'Silenciar no servidor', 'Expulsar do servidor', 'Banir do servidor', 'Copiar ID', 'Enviar mensagem', 'Ver perfil'].every((t) => ownerMenu.includes(t)),
+      ownerMenu);
+    // Keyboard: arrows move focus between items, Esc closes.
+    const kb = await api(A).js(`
+      const menu = document.querySelector('.ui-context-menu');
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      const first = document.activeElement?.textContent?.trim();
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      const second = document.activeElement?.textContent?.trim();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      await new Promise((res) => setTimeout(res, 100));
+      return { first, second, closed: !document.querySelector('.ui-context-menu') };
+    `);
+    check('menu: navegação por teclado e Esc', Boolean(kb.first) && kb.first !== kb.second && kb.closed, JSON.stringify(kb));
+
+    const memberMenu = await menuFor(B, names.A);
+    check('menu (membro): sem ações de moderação sobre o dono',
+      Boolean(memberMenu) && memberMenu.includes('Volume') && !/Expulsar|Banir|Desconectar da chamada|Silenciar no servidor/.test(memberMenu),
+      memberMenu);
+    await closeMenu(B);
+
+    // Local mute through the menu: A stops hearing B, still hears C.
+    await menuFor(A, names.B);
+    await api(A).js(`[...document.querySelectorAll('.ui-context-menu [role="menuitem"]')].find((x) => x.textContent.includes('Silenciar para mim')).click(); return true;`);
+    await sleep(800);
+    // Per-person playback gains in the call's output context.
+    const gains = await api(A).js(`
+      const out = window.__probe.ctxs.filter((c) => /VoiceContext/.test(c.__where || '')).pop();
+      return window.__probe.gains.filter((g) => g.ctx === out).map((g) => g.node.gain.value).join('/');
+    `);
+    const g = gains.split('/').map(Number);
+    check('menu: "Silenciar para mim" corta só o áudio de B', g.filter((v) => v === 0).length === 1 && g.filter((v) => v > 0).length >= 1, 'ganhos por pessoa: ' + gains);
+    await menuFor(A, names.B);
+    await api(A).js(`[...document.querySelectorAll('.ui-context-menu [role="menuitem"]')].find((x) => x.textContent.includes('Ativar áudio')).click(); return true;`);
+    // Volume slider persists per person.
+    await menuFor(A, names.B);
+    const vol = await api(A).js(`
+      const input = document.querySelector('.ui-menu-slider input');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '150');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((res) => setTimeout(res, 200));
+      return { label: document.querySelector('.ui-menu-slider em')?.textContent, saved: localStorage.getItem('concord_user_volumes') };
+    `);
+    await closeMenu(A);
+    check('menu: volume individual (150%) aplicado e salvo', vol.label === '150%' && /1\.5/.test(vol.saved || ''), JSON.stringify(vol));
 
     // C leaves to keep the screen test focused on A and B.
     await api(C).js(`document.querySelector('.dock-btn.leave')?.click()`);

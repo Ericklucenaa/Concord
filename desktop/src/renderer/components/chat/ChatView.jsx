@@ -1,6 +1,6 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown, Upload, Reply, Pencil, Pin, PinOff, Copy, Trash2, EyeOff, SmilePlus, RotateCw, X, AlertCircle
+  ArrowDown, Upload, Reply, Pencil, Pin, PinOff, Copy, Trash2, EyeOff, RotateCw, X, AlertCircle, Hash
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useNotification } from '../../context/NotificationContext';
@@ -28,6 +28,7 @@ import MessageComposer from './MessageComposer';
 import ImageLightboxModal from '../ImageLightboxModal';
 import { PollModal } from './Polls';
 import { logWarn } from '../../services/log';
+import { useUserMenu } from '../useUserMenu';
 
 const GROUP_WINDOW_MS = 5 * 60_000;
 
@@ -72,6 +73,7 @@ const ChatView = forwardRef(function ChatView(
   const { showError, showConfirm, showSuccess, showToast } = useNotification();
   const { markRead, readState } = useUnread();
   const { openMenu, openProfile } = useOverlayUI();
+  const openUserMenu = useUserMenu();
   const key = keyOf(scope);
   const { messages, hasMore, loadMore, loading, error } = useMessages(scope);
   const { typingNames, notifyTyping, stopTyping } = useTyping(scope, user);
@@ -303,15 +305,21 @@ const ChatView = forwardRef(function ChatView(
     if (mine) setEditingId(mine.id);
   };
 
+  const openAuthorMenu = useCallback(
+    (event, message) => openUserMenu(event, { id: message.authorId, username: message.authorName, avatar: message.authorAvatar }),
+    [openUserMenu]
+  );
+
   const openMessageMenu = useCallback((event, message) => {
     const mine = message.authorId === user.id;
     openMenu(event, [
+      { emojis: ['👍', '❤️', '😂', '😮', '😢', '🔥'], onPick: (emoji) => handleReact(message, emoji) },
       { label: 'Responder', icon: Reply, onClick: () => setReplyTo(message) },
-      { label: 'Adicionar reação', icon: SmilePlus, onClick: () => handleReact(message, '👍'), hint: '👍' },
       mine && { label: 'Editar', icon: Pencil, onClick: () => setEditingId(message.id) },
       canPin && { label: message.pinned ? 'Desafixar' : 'Fixar mensagem', icon: message.pinned ? PinOff : Pin, onClick: () => handlePin(message) },
       { label: 'Copiar texto', icon: Copy, onClick: () => navigator.clipboard.writeText(message.content || '') },
       { label: 'Marcar como não lida', icon: EyeOff, onClick: () => markUnreadFrom(message) },
+      { label: 'Copiar ID da mensagem', icon: Hash, onClick: () => navigator.clipboard.writeText(message.id) },
       (mine || canModerate) && { separator: true },
       (mine || canModerate) && { label: 'Excluir mensagem', icon: Trash2, danger: true, onClick: () => handleDelete(message) }
     ]);
@@ -384,6 +392,7 @@ const ChatView = forwardRef(function ChatView(
         onJumpTo={jumpTo}
         onJoinInvite={joinInvite}
         onContextMenu={openMessageMenu}
+        onUserContextMenu={openAuthorMenu}
         onOpenProfile={openProfile}
         onVote={handleVote}
       />

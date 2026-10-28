@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useAuth } from '../context/AuthContext';
 import { useVoice } from '../context/VoiceContext';
@@ -22,8 +22,8 @@ import {
   Radio,
   X,
   Sparkles,
-  UserX,
   Lock,
+  Copy,
   Megaphone,
   Signal,
   PlusCircle,
@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { CHANNEL_TYPES } from '@shared/constants';
 import SoundboardModal from './SoundboardModal';
+import { useUserMenu } from './useUserMenu';
 import ChannelSettingsModal from './modals/ChannelSettingsModal';
 import UserFooter from './UserFooter';
 import EventsModal from './modals/EventsModal';
@@ -44,7 +45,7 @@ import { useOverlayUI } from '../context/OverlayUIContext';
 import { MUTE_DURATIONS } from '../services/cloud/userSettings';
 import { useNotification } from '../context/NotificationContext';
 import { useUnread } from '../context/UnreadContext';
-import { isAdmin, isModerator, isChannelReadOnly, channelAllowedRoles } from '../services/permissions';
+import { isAdmin, isChannelReadOnly, channelAllowedRoles } from '../services/permissions';
 
 const QUALITY_LABEL = {
   good: 'Conexão boa',
@@ -58,6 +59,7 @@ const QUALITY_LABEL = {
 export default function ChannelSidebar() {
   const { showConfirm, showError } = useNotification();
   const { openMenu } = useOverlayUI();
+  const openUserMenu = useUserMenu();
   const {
     activeServer,
     activeChannel,
@@ -98,14 +100,12 @@ export default function ChannelSidebar() {
     voiceChannelUsersMap,
     joinVoice, 
     leaveVoice, 
-    kickUserFromVoice,
     isMuted, 
     isDeafened, 
     isSpeaking,
     toggleMute,
     toggleDeafen,
     userVolumes,
-    setUserVolume,
     connectionQuality,
     averagePing,
     isServerMuted
@@ -118,33 +118,12 @@ export default function ChannelSidebar() {
   } = useScreenShare();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [selectedVoiceUser, setSelectedVoiceUser] = useState(null);
   const [isSoundboardOpen, setIsSoundboardOpen] = useState(false);
-  const voiceUserPopoverRef = useRef(null);
 
-  // Close voice user modal whenever active server or channel changes
   useEffect(() => {
-    setSelectedVoiceUser(null);
     setIsMenuOpen(false);
   }, [activeServer?.id, activeChannel?.id]);
 
-  // Close voice user modal when clicking anywhere outside
-  useEffect(() => {
-    if (!selectedVoiceUser) return;
-    const handleClickOutside = (e) => {
-      if (
-        voiceUserPopoverRef.current && 
-        !voiceUserPopoverRef.current.contains(e.target) && 
-        !e.target.closest('.voice-user-pill')
-      ) {
-        setSelectedVoiceUser(null);
-      }
-    };
-    document.addEventListener('pointerdown', handleClickOutside);
-    return () => {
-      document.removeEventListener('pointerdown', handleClickOutside);
-    };
-  }, [selectedVoiceUser]);
 
   if (!activeServer) {
     return (
@@ -161,7 +140,6 @@ export default function ChannelSidebar() {
   }
 
   const isStaff = isAdmin(activeServer, user?.id);
-  const canModerateVoice = isModerator(activeServer, user?.id);
   const isServerOwner = activeServer.ownerId === user?.id;
   const textChannels = visibleChannels.filter((c) => c.type === CHANNEL_TYPES.TEXT);
   const voiceChannels = visibleChannels.filter((c) => c.type === CHANNEL_TYPES.VOICE);
@@ -360,24 +338,22 @@ export default function ChannelSidebar() {
                           className={`voice-user-pill ${speaking ? 'speaking' : ''}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (u.isScreenSharing) {
-                              watchStream(u, channel);
-                            } else {
-                              setSelectedVoiceUser(selectedVoiceUser?.userId === u.userId ? null : { ...u, channelId: channel.id });
-                            }
+                            if (u.isScreenSharing) watchStream(u, channel);
+                            else openUserMenu(e, { id: u.userId, username: u.username, avatar: u.avatar }, { server: activeServer });
                           }}
+                          onContextMenu={(e) => openUserMenu(e, { id: u.userId, username: u.username, avatar: u.avatar }, { server: activeServer })}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
                             padding: '5px 8px',
                             borderRadius: 'var(--radius-sm)',
-                            backgroundColor: selectedVoiceUser?.userId === u.userId ? 'var(--bg-active)' : 'rgba(0, 0, 0, 0.2)',
+                            backgroundColor: 'rgba(0, 0, 0, 0.2)',
                             margin: '2px 0',
                             cursor: 'pointer',
                             transition: 'background-color 0.15s ease'
                           }}
-                          title={u.isScreenSharing ? `Transmitindo Ao Vivo - Clique para assistir` : `Clique para opções de áudio e perfil de @${u.username}`}
+                          title={u.isScreenSharing ? 'Transmitindo ao vivo — clique para assistir, botão direito para opções' : `Clique para volume, perfil e ações de @${u.username}`}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
                             <div style={{ position: 'relative', width: 22, height: 22, flexShrink: 0 }}>
@@ -565,7 +541,8 @@ export default function ChannelSidebar() {
       { label: 'Convidar para este canal', icon: UserPlus, onClick: () => openModal('invite', channel.id) },
       channel.type === CHANNEL_TYPES.TEXT && { separator: true },
       ...(channel.type === CHANNEL_TYPES.TEXT ? muteItems('channel', channel.id, isChannelMuted(channel.id)) : []),
-      isStaff && !channel.temporary && { separator: true },
+      { separator: true },
+      { label: 'Copiar ID do canal', icon: Copy, onClick: () => navigator.clipboard.writeText(channel.id) },
       isStaff && !channel.temporary && { label: 'Configurações do canal', icon: Settings, onClick: () => setEditingChannel(channel) },
       isStaff && !channel.temporary && {
         label: 'Excluir canal',
@@ -832,108 +809,6 @@ export default function ChannelSidebar() {
           );
         })}
 
-        {/* Discord-style Voice User Controls Modal/Popover */}
-        {selectedVoiceUser && (
-          <div 
-            ref={voiceUserPopoverRef}
-            style={{
-              margin: '8px 10px',
-              padding: 12,
-              backgroundColor: 'var(--bg-tertiary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-color)',
-              boxShadow: 'var(--shadow-lg)'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <img 
-                  src={selectedVoiceUser.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${selectedVoiceUser.username}`} 
-                  alt="" 
-                  style={{ width: 28, height: 28, borderRadius: 'var(--radius-full)', objectFit: 'cover', border: '1px solid var(--border-color)' }}
-                />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>{selectedVoiceUser.username}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>@{selectedVoiceUser.username}</div>
-                </div>
-              </div>
-              <button className="icon-btn" onClick={() => setSelectedVoiceUser(null)}>
-                <X size={14} />
-              </button>
-            </div>
-
-            {selectedVoiceUser.userId !== user?.id ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                    <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Volume do Usuário</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
-                      {Math.round(((userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1) * 100))}%
-                    </span>
-                  </div>
-                  <input 
-                    type="range" 
-                    min="0" 
-                    max="2" 
-                    step="0.05"
-                    value={userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1}
-                    onChange={(e) => setUserVolume(selectedVoiceUser.userId, parseFloat(e.target.value))}
-                    style={{ width: '100%', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button 
-                    className="btn btn-secondary"
-                    style={{ flex: 1, padding: '6px 8px', fontSize: 12, justifyContent: 'center' }}
-                    onClick={() => {
-                      const cur = userVolumes?.get(selectedVoiceUser.userId) !== undefined ? userVolumes.get(selectedVoiceUser.userId) : 1;
-                      setUserVolume(selectedVoiceUser.userId, cur === 0 ? 1 : 0);
-                    }}
-                  >
-                    {(userVolumes?.get(selectedVoiceUser.userId) === 0) ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                    {(userVolumes?.get(selectedVoiceUser.userId) === 0) ? 'Desmutar' : 'Mutar Local'}
-                  </button>
-
-                  <button 
-                    className="btn btn-secondary"
-                    style={{ padding: '6px 8px', fontSize: 12 }}
-                    onClick={() => setUserVolume(selectedVoiceUser.userId, 1)}
-                    title="Redefinir volume para 100%"
-                  >
-                    100%
-                  </button>
-                </div>
-
-                {canModerateVoice && <button
-                  className="btn btn-secondary hover-danger"
-                  style={{ width: '100%', padding: '7px 10px', fontSize: 12, justifyContent: 'center', color: 'var(--accent-danger)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}
-                  onClick={async () => {
-                    const confirmed = await showConfirm(
-                      'Desconectar Usuário',
-                      `Deseja desconectar @${selectedVoiceUser.username} do canal de voz?`,
-                      { isDanger: true, confirmText: 'Desconectar' }
-                    );
-                    if (confirmed) {
-                      const targetChannelId = selectedVoiceUser.channelId || activeVoiceChannel?.id;
-                      if (targetChannelId) {
-                        kickUserFromVoice(targetChannelId, selectedVoiceUser.userId, selectedVoiceUser.username);
-                      }
-                      setSelectedVoiceUser(null);
-                    }
-                  }}
-                >
-                  <UserX size={14} />
-                  Desconectar do Canal
-                </button>}
-              </div>
-            ) : (
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
-                Este é o seu perfil de voz ativo.
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Active Voice Connection Bar */}

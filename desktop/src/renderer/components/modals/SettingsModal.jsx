@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { compressImage } from '../../services/cloud/attachments';
 import { AppSettingsPanel, VoiceModeSettings } from './SettingsPanels';
 import { ProfileExtras, PrivacyAccountPanel, VoiceExtras } from './AccountPanels';
@@ -55,7 +55,11 @@ export default function SettingsModal() {
     updateNoiseGateThreshold
   } = useVoice();
 
-  const [activeTab, setActiveTab] = useState('account'); // 'account', 'audio', 'appearance'
+  const [activeTab, setActiveTab] = useState('account'); // 'account', 'audio', 'appearance', 'app', 'privacy'
+  const requestedTab = typeof modalState.settings === 'string' ? modalState.settings : null;
+  useEffect(() => {
+    if (requestedTab) setActiveTab(requestedTab);
+  }, [requestedTab]);
   const [username, setUsername] = useState(user?.username || '');
   const [copiedNickname, setCopiedNickname] = useState(false);
   const [status, setStatus] = useState(user?.status || USER_STATUS.ONLINE);

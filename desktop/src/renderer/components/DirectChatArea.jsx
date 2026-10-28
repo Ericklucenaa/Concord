@@ -14,6 +14,7 @@ import { useOverlayUI } from '../context/OverlayUIContext';
 import { SearchPanel } from './chat/SidePanels';
 import { describeThread } from '../services/cloud/dms';
 import { defaultAvatar } from '../services/cloud/util';
+import { useUserMenu } from './useUserMenu';
 
 const STATUS_LABEL = { online: 'Disponível', idle: 'Ausente', dnd: 'Não perturbe', offline: 'Offline' };
 
@@ -27,6 +28,7 @@ function Avatar({ src, name, status, size = 36 }) {
 }
 
 function FriendsDashboard() {
+  const openUserMenu = useUserMenu();
   const {
     friendList, incomingRequests, outgoingRequests, activeTab, setActiveTab,
     sendFriendRequest, respondFriendRequest, removeFriend, openDMWithUser, blockedIds, unblockUser, blockUser
@@ -108,7 +110,7 @@ function FriendsDashboard() {
             <h3 className="section-title">Recebidos — {incomingRequests.length}</h3>
             {incomingRequests.length === 0 && <div className="side-empty">Nenhum pedido pendente.</div>}
             {incomingRequests.map((r) => (
-              <div key={r.friendshipId} className="person-row">
+              <div key={r.friendshipId} className="person-row" onContextMenu={(e) => openUserMenu(e, r)}>
                 <Avatar src={r.avatar} name={r.username} />
                 <div className="person-info"><strong>{r.username}</strong><span>Pedido de amizade recebido</span></div>
                 <button className="btn btn-primary btn-sm" onClick={() => respondFriendRequest(r, 'accept')}><Check size={14} /> Aceitar</button>
@@ -156,7 +158,11 @@ function FriendsDashboard() {
             {shown.map((f) => {
               const custom = getCustomStatus(f.id);
               return (
-                <div key={f.id} className="person-row">
+                <div
+                  key={f.id}
+                  className="person-row"
+                  onContextMenu={(e) => openUserMenu(e, { id: f.id, username: f.live?.username || f.username, avatar: f.live?.avatar || f.avatar })}
+                >
                   <Avatar src={f.live?.avatar || f.avatar} name={f.username} status={f.status} />
                   <div className="person-info">
                     <strong>{f.live?.username || f.username}</strong>

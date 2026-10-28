@@ -101,6 +101,7 @@ function MessageItem({
   onJumpTo,
   onJoinInvite,
   onContextMenu,
+  onUserContextMenu,
   onOpenProfile,
   onVote
 }) {
@@ -137,6 +138,10 @@ function MessageItem({
           alt=""
           className="message-avatar clickable"
           onClick={(e) => onOpenProfile?.(message.authorId, e)}
+          onContextMenu={(e) => {
+            e.stopPropagation();
+            onUserContextMenu?.(e, message);
+          }}
         />
       )}
 
@@ -151,7 +156,16 @@ function MessageItem({
 
         {!grouped && (
           <div className="message-meta">
-            <button className="message-author" onClick={(e) => onOpenProfile?.(message.authorId, e)}>{message.authorName}</button>
+            <button
+              className="message-author"
+              onClick={(e) => onOpenProfile?.(message.authorId, e)}
+              onContextMenu={(e) => {
+                e.stopPropagation();
+                onUserContextMenu?.(e, message);
+              }}
+            >
+              {message.authorName}
+            </button>
             <span className="message-time" title={formatFull(message.createdAt)}>{formatTime(message.createdAt)}</span>
             {message.pinned && <Pin size={11} className="message-pinned-icon" title="Mensagem fixada" />}
           </div>

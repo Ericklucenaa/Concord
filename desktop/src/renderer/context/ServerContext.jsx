@@ -51,7 +51,8 @@ export function ServerProvider({ children }) {
   const [categoryForNewChannel, setCategoryForNewChannel] = useState(null);
 
   const openModal = useCallback((name, data = null) => {
-    setModalState((prev) => ({ ...prev, [name]: true }));
+    // Settings may open on a given tab: openModal('settings', 'audio').
+    setModalState((prev) => ({ ...prev, [name]: name === 'settings' && typeof data === 'string' ? data : true }));
     if (name === 'invite') setSelectedChannelForInvite(data);
     if (name === 'createChannel') setCategoryForNewChannel(data);
   }, []);

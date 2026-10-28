@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, Plus, Radio, UsersRound } from 'lucide-react';
+import { Users, Plus, Radio, UsersRound, MessageSquare, Copy } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useDM } from '../context/DMContext';
 import { useServer } from '../context/ServerContext';
@@ -8,8 +8,12 @@ import { useUnread } from '../context/UnreadContext';
 import { describeThread } from '../services/cloud/dms';
 import { defaultAvatar } from '../services/cloud/util';
 import UserFooter from './UserFooter';
+import { useOverlayUI } from '../context/OverlayUIContext';
+import { useUserMenu } from './useUserMenu';
 
 export default function DirectMessagesSidebar() {
+  const { openMenu } = useOverlayUI();
+  const openUserMenu = useUserMenu();
   const { user } = useAuth();
   const { threads, activeThreadId, openThread, closeDM, incomingRequests, setActiveTab, blockedIds } = useDM();
   const { openModal } = useServer();
@@ -63,6 +67,16 @@ export default function DirectMessagesSidebar() {
               key={thread.id}
               className={`channel-item dm-item ${thread.id === activeThreadId ? 'active' : ''} ${unread ? 'unread' : ''}`}
               onClick={() => openThread(thread.id)}
+              onContextMenu={(e) => {
+                if (!thread.isGroup && info.other?.id) {
+                  openUserMenu(e, { id: info.other.id, username: info.title, avatar: info.avatar });
+                } else {
+                  openMenu(e, [
+                    { label: 'Abrir conversa', icon: MessageSquare, onClick: () => openThread(thread.id) },
+                    { label: 'Copiar ID do grupo', icon: Copy, onClick: () => navigator.clipboard.writeText(thread.id) }
+                  ], info.title);
+                }
+              }}
             >
               <div className="channel-item-main">
                 {thread.isGroup ? (

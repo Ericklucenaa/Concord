@@ -27,6 +27,7 @@ import { useScreenShare } from '../context/ScreenShareContext';
 import { useAuth } from '../context/AuthContext';
 import { useNotification } from '../context/NotificationContext';
 import SoundboardModal from './SoundboardModal';
+import { useUserMenu } from './useUserMenu';
 import TeamDrawModal from './modals/TeamDrawModal';
 import { VIEWER_QUALITIES } from '../context/ScreenShareContext';
 import { isModerator } from '../services/permissions';
@@ -53,10 +54,14 @@ function CameraVideo({ stream }) {
   return <video ref={ref} autoPlay playsInline muted className="voice-tile-video" />;
 }
 
-function ParticipantTile({ participant, isMe, compact, canModerate, onKick, onWatch, cameraStream }) {
+function ParticipantTile({ participant, isMe, compact, canModerate, onKick, onWatch, cameraStream, onMenu }) {
   const showCamera = Boolean(cameraStream) && participant.isCameraOn !== false;
   return (
-    <div className={`voice-tile ${participant.isSpeaking ? 'speaking' : ''} ${compact ? 'compact' : ''}`}>
+    <div
+      className={`voice-tile ${participant.isSpeaking ? 'speaking' : ''} ${compact ? 'compact' : ''}`}
+      onContextMenu={(e) => onMenu?.(e, participant)}
+      title={isMe ? undefined : 'Botão direito: volume, perfil e ações'}
+    >
       <div className="voice-tile-backdrop" style={{ backgroundImage: `url("${participant.avatar || defaultAvatar(participant.username)}")` }} />
       {showCamera ? (
         <CameraVideo stream={cameraStream} />
@@ -141,6 +146,7 @@ export default function VoiceRoomArea({ embedded = false }) {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [teamDrawOpen, setTeamDrawOpen] = useState(false);
   const isDmCall = Boolean(activeVoiceChannel?.threadId);
+  const openUserMenu = useUserMenu();
 
   // What is on the stage (my capture or the stream I watch) is independent
   // of whether I am presenting.
@@ -196,6 +202,7 @@ export default function VoiceRoomArea({ embedded = false }) {
       canModerate={canModerate}
       onKick={kick}
       onWatch={(p) => watchStream(p, activeVoiceChannel)}
+      onMenu={(e, p) => openUserMenu(e, { id: p.userId, username: p.username, avatar: p.avatar })}
       cameraStream={u.userId === user?.id ? (isCameraOn ? localCameraStream : null) : (u.isCameraOn ? remoteVideos.get(u.userId) : null)}
     />
   ));

@@ -5,6 +5,7 @@ import { useServer } from '../context/ServerContext';
 import { useVoice } from '../context/VoiceContext';
 import { usePresence } from '../context/PresenceContext';
 import { defaultAvatar } from '../services/cloud/util';
+import { useUserMenu } from './useUserMenu';
 
 export default function UserFooter() {
   const { user } = useAuth();
@@ -12,10 +13,16 @@ export default function UserFooter() {
   const { isMuted, isDeafened, toggleMute, toggleDeafen, voiceMode, isPttPressed, activeVoiceChannel } = useVoice();
   const { getStatus, getCustomStatus } = usePresence();
   const custom = getCustomStatus(user?.id);
+  const openUserMenu = useUserMenu();
 
   return (
     <footer className="user-footer-bar">
-      <div className="user-profile-summary" onClick={() => openModal('settings')} title="Configurações do usuário">
+      <div
+        className="user-profile-summary"
+        onClick={() => openModal('settings')}
+        onContextMenu={(e) => openUserMenu(e, { id: user.id, username: user.username, avatar: user.avatar })}
+        title="Configurações do usuário · botão direito para mais opções"
+      >
         <div className="avatar-wrapper">
           <img src={user?.avatar || defaultAvatar(user?.username)} alt={user?.username} className="avatar-img" />
           <div className={`status-dot ${getStatus(user?.id)}`} />
