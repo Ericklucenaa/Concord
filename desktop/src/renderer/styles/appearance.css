@@ -112,3 +112,17 @@
 /* Voice connection that could not be established */
 .voice-quality.failed, .voice-quality-label.failed, .quality-chip.failed { color: var(--accent-danger); }
 .quality-chip.connecting, .voice-quality-label.connecting { color: var(--accent-warning); }
+
+/* Present and watch at the same time: stream switcher on the stage */
+.stream-self-note { margin-left: 6px; opacity: 0.75; font-weight: 500; }
+.stream-switcher {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; max-width: calc(100% - 28px);
+  overflow-x: auto; border-radius: 12px; background: rgba(8, 9, 14, 0.68); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.stream-switcher button {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 6px 12px; border-radius: 9px; border: none; cursor: pointer;
+  background: transparent; color: rgba(255, 255, 255, 0.75); font: inherit; font-size: 12px; font-weight: 650;
+}
+.stream-switcher button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.stream-switcher button.active { background: var(--accent-primary); color: #fff; }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: #f43f5e; box-shadow: 0 0 6px #f43f5e; }

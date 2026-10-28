@@ -42,7 +42,10 @@ export function ScreenShareProvider({ children }) {
   const [screenFps, setScreenFps] = useState(30);
   const [includeAudio, setIncludeAudio] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [watching, setWatching] = useState(null); // { userId, username }
+  const [watching, setWatching] = useState(null); // remote presenter I watch: { userId, username }
+  // Which stream fills the stage when I both present and watch: my own
+  // capture ('local') or the one I watch ('remote').
+  const [focus, setFocus] = useState('remote');
   const [viewerQuality, setViewerQuality] = useState('source');
   const [statsVisible, setStatsVisible] = useState(false);
   const [streamStats, setStreamStats] = useState(null);
@@ -57,11 +60,14 @@ export function ScreenShareProvider({ children }) {
 
   const presenters = useMemo(() => voiceUsers.filter((u) => u.isScreenSharing), [voiceUsers]);
 
-  // The presenter being shown: my own share, or the stream I chose to watch.
+  // Presenting and watching are independent: `showingLocal` only decides
+  // which of the two is on screen.
+  const showingLocal = isScreenSharing && (focus === 'local' || !watching);
   const activePresenter = useMemo(() => {
-    if (isScreenSharing) return { userId, username: user?.username, quality: screenQuality, fps: screenFps };
+    if (showingLocal) return { userId, username: user?.username, quality: screenQuality, fps: screenFps };
     return watching;
-  }, [isScreenSharing, watching, userId, user?.username, screenQuality, screenFps]);
+  }, [showingLocal, watching, userId, user?.username, screenQuality, screenFps]);
+  const displayedStream = showingLocal ? localScreenStream : (watching ? remoteScreenStreams.get(watching.userId) || null : null);
 
   const queueKey = (role, peerId) => `${role}:${peerId}`;
 
@@ -126,6 +132,7 @@ export function ScreenShareProvider({ children }) {
     localStreamRef.current = null;
     setLocalScreenStream(null);
     setIsScreenSharing(false);
+    setFocus('remote');
     toViewersRef.current.forEach((pc, viewerId) => {
       signal(viewerId, 'screen_stopped', {});
       pc.close();
@@ -180,7 +187,9 @@ export function ScreenShareProvider({ children }) {
       setLocalScreenStream(stream);
       setIsScreenSharing(true);
       setIsPickerOpen(false);
-      setWatching(null);
+      // Keep watching whoever I was watching; show my own capture only if
+      // I was not watching anyone.
+      setFocus(watching ? 'remote' : 'local');
       publishVoiceState({ isScreenSharing: true });
       showToast(
         includeAudio && stream.getAudioTracks().length === 0
@@ -235,10 +244,20 @@ export function ScreenShareProvider({ children }) {
       if (current) clearRemote(current.userId);
       return null;
     });
+    setFocus('local');
   }, [clearRemote]);
 
+  /** Puts my own capture on the stage without stopping what I watch. */
+  const showOwnStream = () => setFocus('local');
+
   const watchStream = async (presenterUser, channel) => {
-    if (!presenterUser?.userId || presenterUser.userId === userId) return;
+    if (!presenterUser?.userId) return;
+    if (presenterUser.userId === userId) {
+      if (isScreenSharing) setFocus('local');
+      return;
+    }
+    setFocus('remote');
+    if (watching?.userId === presenterUser.userId) return;
     const target = channel || activeVoiceChannel;
     if (target && activeVoiceChannel?.id !== target.id) await joinVoice(target);
     if (target) setActiveChannel?.(target);
@@ -315,19 +334,19 @@ export function ScreenShareProvider({ children }) {
       return undefined;
     }
     const timer = setInterval(async () => {
-      const pc = isScreenSharing ? Array.from(toViewersRef.current.values())[0] : fromPresenterRef.current.get(watching?.userId);
+      const pc = showingLocal ? Array.from(toViewersRef.current.values())[0] : fromPresenterRef.current.get(watching?.userId);
       if (!pc) {
-        setStreamStats(isScreenSharing ? { viewers: 0 } : null);
+        setStreamStats(showingLocal ? { viewers: 0 } : null);
         return;
       }
       try {
         const report = await pc.getStats();
         let rtp = null;
         report.forEach((r) => {
-          if (r.kind === 'video' && (r.type === (isScreenSharing ? 'outbound-rtp' : 'inbound-rtp'))) rtp = r;
+          if (r.kind === 'video' && (r.type === (showingLocal ? 'outbound-rtp' : 'inbound-rtp'))) rtp = r;
         });
         if (!rtp) return;
-        const bytes = isScreenSharing ? rtp.bytesSent : rtp.bytesReceived;
+        const bytes = showingLocal ? rtp.bytesSent : rtp.bytesReceived;
         const prev = lastStatsRef.current;
         const kbps = prev ? Math.round(((bytes - prev.bytes) * 8) / ((rtp.timestamp - prev.ts) || 1)) : 0;
         lastStatsRef.current = { bytes, ts: rtp.timestamp };
@@ -337,14 +356,14 @@ export function ScreenShareProvider({ children }) {
           height: rtp.frameHeight || 0,
           kbps,
           dropped: rtp.framesDropped ?? null,
-          viewers: isScreenSharing ? toViewersRef.current.size : undefined
+          viewers: showingLocal ? toViewersRef.current.size : undefined
         });
       } catch (err) {
         logWarn('stream stats', err);
       }
     }, 2000);
     return () => clearInterval(timer);
-  }, [statsVisible, isScreenSharing, watching?.userId]);
+  }, [statsVisible, showingLocal, watching?.userId]);
 
   // Presenter stopped or left the room: drop the stream I was watching.
   useEffect(() => {
@@ -398,6 +417,10 @@ export function ScreenShareProvider({ children }) {
         isPickerOpen,
         activePresenter,
         presenters,
+        watching,
+        showingLocal,
+        displayedStream,
+        showOwnStream,
         setScreenQuality,
         setScreenFps,
         setIncludeAudio,

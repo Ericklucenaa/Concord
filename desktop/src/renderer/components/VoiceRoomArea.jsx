@@ -115,9 +115,12 @@ export default function VoiceRoomArea({ embedded = false }) {
   } = useVoice();
   const {
     isScreenSharing,
-    localScreenStream,
-    remoteScreenStreams,
     activePresenter,
+    presenters,
+    watching,
+    showingLocal,
+    displayedStream,
+    showOwnStream,
     screenQuality,
     screenFps,
     stopScreenShare,
@@ -139,24 +142,25 @@ export default function VoiceRoomArea({ embedded = false }) {
   const [teamDrawOpen, setTeamDrawOpen] = useState(false);
   const isDmCall = Boolean(activeVoiceChannel?.threadId);
 
+  // What is on the stage (my capture or the stream I watch) is independent
+  // of whether I am presenting.
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
-  const streamReady = isScreenSharing
-    ? Boolean(localScreenStream?.active)
-    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
+  const streamReady = Boolean(displayedStream?.active);
   const hasActiveStream = isScreenSharing || isViewer;
+  const otherPresenters = presenters.filter((p) => p.userId !== user?.id);
   const canModerate = isModerator(voiceServer, user?.id);
 
   useEffect(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
-    const stream = isScreenSharing ? localScreenStream : remoteScreenStreams.get(activePresenter?.userId);
+    const stream = displayedStream;
     if (stream?.active && stream.getVideoTracks().some((t) => t.readyState === 'live')) {
-      videoEl.srcObject = stream;
+      if (videoEl.srcObject !== stream) videoEl.srcObject = stream;
       videoEl.play().catch((err) => logWarn('screen video play', err));
     } else {
       videoEl.srcObject = null;
     }
-  }, [isScreenSharing, localScreenStream, activePresenter, remoteScreenStreams, streamReady]);
+  }, [displayedStream, streamReady]);
 
   useEffect(() => {
     const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -256,7 +260,7 @@ export default function VoiceRoomArea({ embedded = false }) {
         <div className="voice-stage with-stream">
           <div className="stream-frame">
             {streamReady ? (
-              <video ref={videoRef} className="screen-video" autoPlay playsInline muted={isScreenSharing} />
+              <video ref={videoRef} className="screen-video" autoPlay playsInline muted={showingLocal} />
             ) : (
               <div className="stream-waiting">
                 <div className="pulse-ring"><Radio size={28} /></div>
@@ -266,8 +270,29 @@ export default function VoiceRoomArea({ embedded = false }) {
             )}
             <div className="stream-overlay-badge">
               <span className="live-badge">AO VIVO</span>
-              {isScreenSharing ? 'Você está transmitindo' : `${activePresenter?.username} está transmitindo`}
+              {showingLocal ? 'Sua tela' : `${activePresenter?.username} está transmitindo`}
+              {isScreenSharing && !showingLocal && <span className="stream-self-note">· você também está transmitindo</span>}
             </div>
+            {(otherPresenters.length > 0 || (isScreenSharing && watching)) && (
+              <div className="stream-switcher" role="tablist" aria-label="Transmissões na sala">
+                {isScreenSharing && (
+                  <button role="tab" aria-selected={showingLocal} className={showingLocal ? 'active' : ''} onClick={showOwnStream}>
+                    Sua tela
+                  </button>
+                )}
+                {otherPresenters.map((p) => (
+                  <button
+                    key={p.userId}
+                    role="tab"
+                    aria-selected={!showingLocal && watching?.userId === p.userId}
+                    className={!showingLocal && watching?.userId === p.userId ? 'active' : ''}
+                    onClick={() => watchStream(p, activeVoiceChannel)}
+                  >
+                    <span className="live-dot" /> {p.username}
+                  </button>
+                ))}
+              </div>
+            )}
             {statsVisible && streamStats && (
               <div className="stream-stats">
                 {streamStats.width > 0 && <span>{streamStats.width}×{streamStats.height}</span>}

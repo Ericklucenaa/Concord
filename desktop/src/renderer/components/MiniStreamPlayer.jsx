@@ -9,23 +9,22 @@ export default function MiniStreamPlayer() {
   const { user } = useAuth();
   const { activeVoiceChannel } = useVoice();
   const { activeChannel, setActiveChannel } = useServer();
-  const { 
-    isScreenSharing, 
-    localScreenStream, 
-    remoteScreenStreams, 
+  const {
+    isScreenSharing,
     activePresenter,
+    displayedStream,
+    showingLocal,
     setActivePresenter,
-    stopScreenShare 
+    stopScreenShare
   } = useScreenShare();
 
   const videoRef = useRef(null);
 
-  const isPresenter = isScreenSharing;
+  // "Presenter" here means: the mini player is showing my own capture.
+  const isPresenter = showingLocal;
   const isViewer = Boolean(activePresenter && activePresenter.userId !== user?.id);
-  const streamReady = isPresenter 
-    ? Boolean(localScreenStream && localScreenStream.active) 
-    : Boolean(activePresenter && remoteScreenStreams.has(activePresenter.userId));
-  const hasStream = isPresenter || isViewer;
+  const streamReady = Boolean(displayedStream?.active);
+  const hasStream = isScreenSharing || isViewer;
 
   // Only show mini player if we have an active stream BUT the user is currently viewing a text channel
   const isViewingTextChannel = activeChannel?.type === 'text';
@@ -34,13 +33,7 @@ export default function MiniStreamPlayer() {
     const videoEl = videoRef.current;
     if (!videoEl || !hasStream || !isViewingTextChannel) return;
 
-    let currentStream = null;
-    if (isPresenter && localScreenStream) {
-      currentStream = localScreenStream;
-    } else if (activePresenter && remoteScreenStreams.has(activePresenter.userId)) {
-      currentStream = remoteScreenStreams.get(activePresenter.userId);
-    }
-
+    const currentStream = displayedStream;
     if (currentStream && currentStream.active && currentStream.getVideoTracks().some((t) => t.readyState === 'live')) {
       videoEl.srcObject = currentStream;
       videoEl.play().catch(() => {});
@@ -48,7 +41,7 @@ export default function MiniStreamPlayer() {
       videoEl.srcObject = null;
       videoEl.load();
     }
-  }, [hasStream, isViewingTextChannel, isPresenter, localScreenStream, activePresenter, remoteScreenStreams]);
+  }, [hasStream, isViewingTextChannel, displayedStream]);
 
   if (!hasStream || !isViewingTextChannel || !activeVoiceChannel) {
     return null;
@@ -59,7 +52,7 @@ export default function MiniStreamPlayer() {
   };
 
   return (
-    <div 
+    <div
       className="mini-stream-player"
       style={{
         position: 'fixed',
@@ -84,10 +77,10 @@ export default function MiniStreamPlayer() {
     >
       {/* Video Stream Element */}
       {streamReady ? (
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          playsInline 
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
           muted={isPresenter}
           style={{
             width: '100%',
@@ -102,7 +95,7 @@ export default function MiniStreamPlayer() {
       )}
 
       {/* Header Overlay */}
-      <div 
+      <div
         style={{
           position: 'absolute',
           top: 0,
@@ -117,12 +110,12 @@ export default function MiniStreamPlayer() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ 
-            fontSize: 9, 
-            fontWeight: 800, 
-            backgroundColor: 'var(--accent-danger)', 
-            color: '#fff', 
-            padding: '1px 5px', 
+          <span style={{
+            fontSize: 9,
+            fontWeight: 800,
+            backgroundColor: 'var(--accent-danger)',
+            color: '#fff',
+            padding: '1px 5px',
             borderRadius: 3,
             boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)'
           }}>
@@ -134,7 +127,7 @@ export default function MiniStreamPlayer() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <button 
+          <button
             className="icon-btn"
             style={{ padding: 3, color: '#fff' }}
             onClick={(e) => {
@@ -145,7 +138,7 @@ export default function MiniStreamPlayer() {
           >
             <Maximize2 size={13} />
           </button>
-          <button 
+          <button
             className="icon-btn"
             style={{ padding: 3, color: '#fff' }}
             onClick={(e) => {
@@ -164,7 +157,7 @@ export default function MiniStreamPlayer() {
       </div>
 
       {/* Footer Voice Room Info */}
-      <div 
+      <div
         style={{
           position: 'absolute',
           bottom: 0,
