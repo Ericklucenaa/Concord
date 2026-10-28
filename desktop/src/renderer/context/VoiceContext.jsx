@@ -119,6 +119,7 @@ export function VoiceProvider({ children }) {
   const outputCtxRef = useRef(null);
   const inputCtxRef = useRef(null);
   const animFrameRef = useRef(null);
+  const detectorTrackRef = useRef(null);
   const hangoverRef = useRef({ timer: null, open: false });
   const activeRef = useRef(null);
   const leavingRef = useRef(false);
@@ -212,10 +213,12 @@ export function VoiceProvider({ children }) {
   };
 
   const stopSpeakingDetector = () => {
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (animFrameRef.current) clearInterval(animFrameRef.current);
     animFrameRef.current = null;
     inputCtxRef.current?.close().catch(() => {});
     inputCtxRef.current = null;
+    detectorTrackRef.current?.stop();
+    detectorTrackRef.current = null;
     setIsSpeaking(false);
     setMicVolumeLevel(0);
   };
@@ -232,13 +235,28 @@ export function VoiceProvider({ children }) {
     const filter = ctx.createBiquadFilter();
     filter.type = 'highpass';
     filter.frequency.setValueAtTime(85, ctx.currentTime);
-    ctx.createMediaStreamSource(stream).connect(filter);
+    // The gate disables the outgoing track while you are quiet, and a disabled
+    // track carries silence. Listening to that track would keep the gate shut
+    // forever, so the detector listens to a clone that is never disabled.
+    const detectorTrack = stream.getAudioTracks()[0]?.clone();
+    if (!detectorTrack) return;
+    detectorTrack.enabled = true;
+    detectorTrackRef.current = detectorTrack;
+    ctx.createMediaStreamSource(new MediaStream([detectorTrack])).connect(filter);
     filter.connect(analyser);
     inputCtxRef.current = ctx;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 
+    // A timer, not requestAnimationFrame: rAF stops while the window is
+    // minimized or behind a game, which would leave the microphone shut.
     const data = new Uint8Array(analyser.frequencyBinCount);
+    let lastTick = performance.now();
     const loop = () => {
       const f = flags.current;
+      const now = performance.now();
+      const stalled = now - lastTick > 300 || ctx.state !== 'running';
+      lastTick = now;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       analyser.getByteFrequencyData(data);
       let sum = 0;
       for (let i = 0; i < data.length; i++) sum += data[i];
@@ -246,7 +264,9 @@ export function VoiceProvider({ children }) {
       setMicVolumeLevel(level);
 
       const threshold = f.automaticSensitivity ? SPEAKING_THRESHOLD : f.noiseGateThreshold;
-      if (level >= threshold) {
+      // If the detector cannot keep up (throttled timers, audio context not
+      // running), fail open: better some background noise than a silent mic.
+      if (level >= threshold || stalled) {
         hangoverRef.current.open = true;
         clearTimeout(hangoverRef.current.timer);
         hangoverRef.current.timer = null;
@@ -261,9 +281,9 @@ export function VoiceProvider({ children }) {
       const transmitting = applyTransmitState(hangoverRef.current.open);
       const speakingNow = transmitting && (f.voiceMode === 'ptt' ? level >= SPEAKING_THRESHOLD || hangoverRef.current.open : hangoverRef.current.open);
       setIsSpeaking((prev) => (prev === speakingNow ? prev : speakingNow));
-      animFrameRef.current = requestAnimationFrame(loop);
     };
     loop();
+    animFrameRef.current = setInterval(loop, 40);
   };
 
   const ensureLocalStream = async (force = false) => {

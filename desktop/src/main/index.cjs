@@ -113,7 +113,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      partition: 'persist:concord'
+      partition: 'persist:concord',
+      // Voice must keep running at full speed while minimized or behind a game.
+      backgroundThrottling: false
     }
   });
 
