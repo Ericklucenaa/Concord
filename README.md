@@ -99,3 +99,11 @@ firebase deploy --only hosting
 ```
 
 `publish-release.mjs` cria o release no GitHub e grava o manifesto de atualização (com o SHA-256 do instalador) no Firestore usando as credenciais do `gcloud`. Os clientes só leem esse manifesto; as regras impedem qualquer escrita por clientes.
+
+## Apoie o projeto
+
+O Concord é grátis. Se ele for útil para você, qualquer valor ajuda a manter o projeto:
+
+[![Apoie no Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/ericklucena)
+
+No app, o botão **Apoiar** fica sempre visível na barra de título. A doação é opcional e não libera nenhuma função extra.

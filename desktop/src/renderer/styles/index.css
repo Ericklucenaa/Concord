@@ -200,6 +200,39 @@ textarea {
   color: var(--accent-primary);
 }
 
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 100%;
+}
+
+/* Always-visible donation link; the last child on the web, where there are no window buttons. */
+.titlebar-donate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent-primary-hover);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  -webkit-app-region: no-drag;
+  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.titlebar-donate:last-child {
+  margin-right: 12px;
+}
+
+.titlebar-donate:hover {
+  background: var(--accent-primary);
+  color: #fff;
+}
+
 .titlebar-controls {
   display: flex;
   align-items: center;
